@@ -10,7 +10,10 @@ Standalone Express + TypeScript backend for the Property Management Dashboard pl
 - JWT (separate admin, owner, and tenant auth)
 
 ## Project Structure
-- `src/index.ts`: app bootstrap, middleware, CORS, route mounting.
+- `src/app.ts`: Express app factory and route/middleware mounting.
+- `src/index.ts`: local Node server bootstrap (`app.listen`).
+- `api/index.js`: Vercel serverless entrypoint.
+- `vercel.json`: Vercel build/runtime/routing config.
 - `src/config/env.ts`: env validation and normalized config.
 - `src/lib/*`: reusable infrastructure (JWT, Supabase client, mailer, errors).
 - `src/middleware/*`: auth guards, request context, rate limiting, global error handling.
@@ -55,6 +58,24 @@ npm run build
 npm run start
 ```
 
+## Deploy to Vercel
+This backend is configured for Vercel serverless deployment.
+
+1. Import the `tenant-backend` repo in Vercel.
+2. Use default project settings.
+3. Add environment variables in Vercel Project Settings:
+   - `NODE_ENV=production`
+   - `SUPABASE_URL`
+   - `SUPABASE_SERVICE_ROLE_KEY`
+   - `JWT_SECRET`
+   - `EMAIL_USER`
+   - `EMAIL_PASS`
+   - `OPENAI_API_KEY` (optional)
+   - `FRONTEND_URL` (your frontend Vercel URL)
+   - `ALLOWED_ORIGINS` (comma-separated list; include your frontend URL)
+4. Deploy and verify health:
+   - `https://<your-backend-project>.vercel.app/api/health`
+
 ## Database Setup
 Run migrations in Supabase SQL editor, in order:
 - `supabase/migrations/001_initial_schema.sql`
@@ -65,6 +86,7 @@ Run migrations in Supabase SQL editor, in order:
 - `supabase/migrations/006_multi_tenant_organizations.sql`
 - `supabase/migrations/007_ai_infrastructure.sql`
 - `supabase/migrations/008_remove_stripe_integration.sql`
+- `supabase/migrations/009_seed_additional_admin_users.sql`
 
 Seeded admin (development):
 - email: `admin@tenantflow.app`

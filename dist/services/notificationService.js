@@ -17,7 +17,10 @@ export async function notifyOwnerTicketCreated(input) {
         title: `New support ticket from ${input.tenantName}`,
         message: `${input.subject}: ${input.message}`,
     });
-    const toEmail = owner.support_email || owner.email;
+    const toEmail = [owner.email, owner.support_email]
+        .filter((value) => typeof value === 'string' && value.trim().length > 0)
+        .filter((value, index, list) => list.indexOf(value) === index)
+        .join(', ');
     try {
         await sendOwnerTicketNotification({
             to: toEmail,
