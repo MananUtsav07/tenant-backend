@@ -1,7 +1,7 @@
 import cors from 'cors'
-import express, { type Request } from 'express'
-import * as helmet from 'helmet'
+import express, { type Request, type RequestHandler } from 'express'
 import morgan from 'morgan'
+import { createRequire } from 'node:module'
 
 import { env } from './config/env.js'
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js'
@@ -14,6 +14,14 @@ import { createOwnerAiRouter } from './routes/ownerAiRoutes.js'
 import { createOwnerRouter } from './routes/ownerRoutes.js'
 import { createPublicRouter } from './routes/publicRoutes.js'
 import { createTenantRouter } from './routes/tenantRoutes.js'
+
+const require = createRequire(import.meta.url)
+const helmetImport = require('helmet') as
+  | ((...args: unknown[]) => RequestHandler)
+  | { default?: (...args: unknown[]) => RequestHandler }
+
+const helmetMiddleware =
+  typeof helmetImport === 'function' ? helmetImport : (helmetImport.default ?? (() => (_req, _res, next) => next()))
 
 export function createApp() {
   const app = express()
@@ -45,7 +53,7 @@ export function createApp() {
       credentials: true,
     }),
   )
-  app.use(helmet.default())
+  app.use(helmetMiddleware())
   app.use(express.json({ limit: '1mb' }))
   app.use(express.urlencoded({ extended: true }))
   app.use(morgan(':method :url :status :response-time ms reqId=:requestId'))
