@@ -2,12 +2,33 @@ import type { PostgrestError } from '@supabase/supabase-js'
 
 import { AppError } from '../lib/errors.js'
 import { supabaseAdmin } from '../lib/supabase.js'
+import { getCurrentCycleYearMonth, resolveTenantPaymentStatus } from '../utils/paymentStatus.js'
 import { isTicketClassificationEnabled } from './ai/featureFlags.js'
 
 function throwIfError(error: PostgrestError | null, message: string): void {
   if (error) {
     throw new AppError(message, 500, error.message)
   }
+}
+
+async function hasApprovedRentPaymentForCurrentCycle(input: {
+  tenantId: string
+  organizationId: string
+  now?: Date
+}): Promise<boolean> {
+  const { cycleYear, cycleMonth } = getCurrentCycleYearMonth(input.now)
+  const { data, error } = await supabaseAdmin
+    .from('rent_payment_approvals')
+    .select('id')
+    .eq('organization_id', input.organizationId)
+    .eq('tenant_id', input.tenantId)
+    .eq('cycle_year', cycleYear)
+    .eq('cycle_month', cycleMonth)
+    .eq('status', 'approved')
+    .limit(1)
+
+  throwIfError(error, 'Failed to resolve tenant payment approval status')
+  return Boolean(data?.length)
 }
 
 export async function findTenantByAccessId(tenantAccessId: string) {
@@ -34,7 +55,26 @@ export async function getTenantById(tenantId: string, organizationId?: string) {
   const { data, error } = await request.maybeSingle()
 
   throwIfError(error, 'Failed to fetch tenant')
-  return data
+  if (!data) {
+    return null
+  }
+
+  const now = new Date()
+  const approvedForCurrentCycle = await hasApprovedRentPaymentForCurrentCycle({
+    tenantId: data.id,
+    organizationId: data.organization_id,
+    now,
+  })
+
+  return {
+    ...data,
+    payment_status: resolveTenantPaymentStatus({
+      paymentStatus: data.payment_status,
+      paymentDueDay: data.payment_due_day,
+      isCurrentCycleApproved: approvedForCurrentCycle,
+      now,
+    }),
+  }
 }
 
 export async function getTenantSummary(tenantId: string, organizationId: string) {

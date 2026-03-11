@@ -4,6 +4,7 @@ import { AppError } from '../lib/errors.js'
 import { supabaseAdmin } from '../lib/supabase.js'
 import { resolveCurrencyCode, type SupportedCountryCode } from '../config/countryCurrency.js'
 import { generateTenantAccessId } from '../utils/ids.js'
+import { getCurrentCycleYearMonth, resolveTenantPaymentStatus, type TenantPaymentStatus } from '../utils/paymentStatus.js'
 import { isTicketSummarizationEnabled } from './ai/featureFlags.js'
 import { createOrganization, upsertOwnerMembership } from './organizationService.js'
 
@@ -11,6 +12,53 @@ function throwIfError(error: PostgrestError | null, message: string): void {
   if (error) {
     throw new AppError(message, 500, error.message)
   }
+}
+
+type TenantWithPaymentFields = {
+  id: string
+  organization_id: string
+  payment_due_day: number
+  payment_status: TenantPaymentStatus
+}
+
+async function listApprovedTenantIdsForCurrentCycle(input: {
+  organizationId: string
+  tenantIds: string[]
+  now?: Date
+}): Promise<Set<string>> {
+  if (input.tenantIds.length === 0) {
+    return new Set<string>()
+  }
+
+  const { cycleYear, cycleMonth } = getCurrentCycleYearMonth(input.now)
+  const { data, error } = await supabaseAdmin
+    .from('rent_payment_approvals')
+    .select('tenant_id')
+    .eq('organization_id', input.organizationId)
+    .eq('cycle_year', cycleYear)
+    .eq('cycle_month', cycleMonth)
+    .eq('status', 'approved')
+    .in('tenant_id', input.tenantIds)
+
+  throwIfError(error, 'Failed to load approved rent payments for current cycle')
+
+  return new Set<string>((data ?? []).map((row) => row.tenant_id as string))
+}
+
+function applyComputedPaymentStatus<T extends TenantWithPaymentFields>(
+  tenants: T[],
+  approvedTenantIds: Set<string>,
+  now = new Date(),
+): Array<T & { payment_status: TenantPaymentStatus }> {
+  return tenants.map((tenant) => ({
+    ...tenant,
+    payment_status: resolveTenantPaymentStatus({
+      paymentStatus: tenant.payment_status,
+      paymentDueDay: tenant.payment_due_day,
+      isCurrentCycleApproved: approvedTenantIds.has(tenant.id),
+      now,
+    }),
+  }))
 }
 
 export async function findOwnerByEmail(email: string) {
@@ -240,7 +288,15 @@ export async function listTenants(organizationId: string) {
     .order('created_at', { ascending: false })
 
   throwIfError(error, 'Failed to list tenants')
-  return data ?? []
+  const tenants = (data ?? []) as TenantWithPaymentFields[]
+  const now = new Date()
+  const approvedTenantIds = await listApprovedTenantIdsForCurrentCycle({
+    organizationId,
+    tenantIds: tenants.map((tenant) => tenant.id),
+    now,
+  })
+
+  return applyComputedPaymentStatus(tenants, approvedTenantIds, now)
 }
 
 export async function getTenantForOwner(organizationId: string, tenantId: string) {
@@ -252,7 +308,18 @@ export async function getTenantForOwner(organizationId: string, tenantId: string
     .maybeSingle()
 
   throwIfError(error, 'Failed to fetch tenant')
-  return data
+  if (!data) {
+    return null
+  }
+
+  const now = new Date()
+  const approvedTenantIds = await listApprovedTenantIdsForCurrentCycle({
+    organizationId,
+    tenantIds: [data.id],
+    now,
+  })
+
+  return applyComputedPaymentStatus([data as TenantWithPaymentFields], approvedTenantIds, now)[0]
 }
 
 export async function updateTenant(organizationId: string, tenantId: string, patch: Record<string, unknown>) {
@@ -392,10 +459,10 @@ export async function createOwnerNotification(input: {
 }
 
 export async function getOwnerDashboardSummary(organizationId: string, ownerId?: string) {
-  const [tenantsResult, ticketsResult, overdueResult, remindersResult, unreadNotificationsResult] = await Promise.all([
+  const [activeTenantsResult, ticketsResult, remindersResult, unreadNotificationsResult] = await Promise.all([
     supabaseAdmin
       .from('tenants')
-      .select('id', { count: 'exact', head: true })
+      .select('id, payment_due_day, payment_status')
       .eq('organization_id', organizationId)
       .eq('status', 'active'),
     supabaseAdmin
@@ -403,11 +470,6 @@ export async function getOwnerDashboardSummary(organizationId: string, ownerId?:
       .select('id', { count: 'exact', head: true })
       .eq('organization_id', organizationId)
       .in('status', ['open', 'in_progress']),
-    supabaseAdmin
-      .from('tenants')
-      .select('id', { count: 'exact', head: true })
-      .eq('organization_id', organizationId)
-      .eq('payment_status', 'overdue'),
     supabaseAdmin
       .from('rent_reminders')
       .select('id', { count: 'exact', head: true })
@@ -432,16 +494,26 @@ export async function getOwnerDashboardSummary(organizationId: string, ownerId?:
     awaitingApprovals = awaitingApprovalsResult.count ?? 0
   }
 
-  throwIfError(tenantsResult.error, 'Failed to count active tenants')
+  throwIfError(activeTenantsResult.error, 'Failed to load active tenants')
   throwIfError(ticketsResult.error, 'Failed to count open tickets')
-  throwIfError(overdueResult.error, 'Failed to count overdue rents')
   throwIfError(remindersResult.error, 'Failed to count pending reminders')
   throwIfError(unreadNotificationsResult.error, 'Failed to count unread notifications')
 
+  const activeTenants = (activeTenantsResult.data ?? []) as TenantWithPaymentFields[]
+  const now = new Date()
+  const approvedTenantIds = await listApprovedTenantIdsForCurrentCycle({
+    organizationId,
+    tenantIds: activeTenants.map((tenant) => tenant.id),
+    now,
+  })
+  const overdueCount = applyComputedPaymentStatus(activeTenants, approvedTenantIds, now).filter(
+    (tenant) => tenant.payment_status === 'overdue',
+  ).length
+
   return {
-    active_tenants: tenantsResult.count ?? 0,
+    active_tenants: activeTenants.length,
     open_tickets: ticketsResult.count ?? 0,
-    overdue_rent: overdueResult.count ?? 0,
+    overdue_rent: overdueCount,
     reminders_pending: remindersResult.count ?? 0,
     unread_notifications: unreadNotificationsResult.count ?? 0,
     awaiting_approvals: awaitingApprovals,
