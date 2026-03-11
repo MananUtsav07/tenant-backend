@@ -21,6 +21,17 @@ type TicketNotificationPayload = {
   message: string
 }
 
+type RentPaymentApprovalNotificationPayload = {
+  to: string
+  ownerName: string
+  tenantName: string
+  tenantAccessId: string
+  propertyName: string | null
+  unitNumber: string | null
+  dueDateLabel: string
+  amountPaidLabel: string
+}
+
 type PublicContactNotificationPayload = {
   to: string
   name: string
@@ -48,6 +59,29 @@ export async function sendOwnerTicketNotification(payload: TicketNotificationPay
       `Message: ${payload.message}`,
       '',
       'Please log in to your owner dashboard to respond.',
+    ].join('\n'),
+  })
+}
+
+export async function sendOwnerRentPaymentApprovalNotification(payload: RentPaymentApprovalNotificationPayload) {
+  const propertyLabel = payload.propertyName?.trim() || 'Not provided'
+  const unitLabel = payload.unitNumber?.trim() || 'Not provided'
+
+  await transporter.sendMail({
+    from: env.EMAIL_USER,
+    to: payload.to,
+    subject: `Rent Payment Awaiting Approval: ${payload.tenantName}`,
+    text: [
+      `Hello ${payload.ownerName},`,
+      '',
+      'A tenant marked their monthly rent as paid and is waiting for your approval.',
+      `Tenant: ${payload.tenantName} (${payload.tenantAccessId})`,
+      `Property: ${propertyLabel}`,
+      `Unit: ${unitLabel}`,
+      `Due Date: ${payload.dueDateLabel}`,
+      `Amount Paid: ${payload.amountPaidLabel}`,
+      '',
+      'Please log in to your owner dashboard and review this payment request.',
     ].join('\n'),
   })
 }

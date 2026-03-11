@@ -391,7 +391,7 @@ export async function createOwnerNotification(input: {
   return data
 }
 
-export async function getOwnerDashboardSummary(organizationId: string) {
+export async function getOwnerDashboardSummary(organizationId: string, ownerId?: string) {
   const [tenantsResult, ticketsResult, overdueResult, remindersResult, unreadNotificationsResult] = await Promise.all([
     supabaseAdmin
       .from('tenants')
@@ -420,6 +420,18 @@ export async function getOwnerDashboardSummary(organizationId: string) {
       .eq('is_read', false),
   ])
 
+  let awaitingApprovals = 0
+  if (ownerId) {
+    const awaitingApprovalsResult = await supabaseAdmin
+      .from('rent_payment_approvals')
+      .select('id', { count: 'exact', head: true })
+      .eq('organization_id', organizationId)
+      .eq('owner_id', ownerId)
+      .eq('status', 'awaiting_owner_approval')
+    throwIfError(awaitingApprovalsResult.error, 'Failed to count awaiting rent payment approvals')
+    awaitingApprovals = awaitingApprovalsResult.count ?? 0
+  }
+
   throwIfError(tenantsResult.error, 'Failed to count active tenants')
   throwIfError(ticketsResult.error, 'Failed to count open tickets')
   throwIfError(overdueResult.error, 'Failed to count overdue rents')
@@ -432,5 +444,6 @@ export async function getOwnerDashboardSummary(organizationId: string) {
     overdue_rent: overdueResult.count ?? 0,
     reminders_pending: remindersResult.count ?? 0,
     unread_notifications: unreadNotificationsResult.count ?? 0,
+    awaiting_approvals: awaitingApprovals,
   }
 }

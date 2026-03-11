@@ -22,7 +22,9 @@ import {
   updateTenant,
 } from '../services/ownerService.js'
 import { processOwnerReminders } from '../services/reminderService.js'
+import { listOwnerAwaitingRentPaymentApprovals, reviewOwnerRentPaymentApproval } from '../services/rentPaymentService.js'
 import { createTenantSchema, createPropertySchema, updatePropertySchema, updateTenantSchema, updateTicketStatusSchema } from '../validations/ownerSchemas.js'
+import { ownerReviewRentPaymentSchema } from '../validations/rentPaymentSchemas.js'
 
 function requireOwnerContext(request: Request): { ownerId: string; organizationId: string } {
   const ownerId = request.owner?.ownerId
@@ -291,9 +293,60 @@ export const markOwnerNotificationRead = asyncHandler(async (request: Request, r
 })
 
 export const getOwnerSummary = asyncHandler(async (request: Request, response: Response) => {
-  const organizationId = requireOrganizationContext(request)
-  const summary = await getOwnerDashboardSummary(organizationId)
+  const { ownerId, organizationId } = requireOwnerContext(request)
+  const summary = await getOwnerDashboardSummary(organizationId, ownerId)
   response.json({ ok: true, summary })
+})
+
+export const getOwnerRentPaymentApprovals = asyncHandler(async (request: Request, response: Response) => {
+  const { ownerId, organizationId } = requireOwnerContext(request)
+  const approvals = await listOwnerAwaitingRentPaymentApprovals({
+    ownerId,
+    organizationId,
+  })
+
+  response.json({
+    ok: true,
+    approvals,
+  })
+})
+
+export const patchOwnerRentPaymentApproval = asyncHandler(async (request: Request, response: Response) => {
+  const { ownerId, organizationId } = requireOwnerContext(request)
+  const approvalId = readPathId(request, 'id')
+  const parsed = ownerReviewRentPaymentSchema.parse(request.body)
+
+  const approval = await reviewOwnerRentPaymentApproval({
+    approvalId,
+    ownerId,
+    organizationId,
+    action: parsed.action,
+    rejectionReason: parsed.rejection_reason,
+  })
+  if (!approval) {
+    throw new AppError('Failed to review rent payment approval', 500)
+  }
+
+  await createAuditLog({
+    organization_id: organizationId,
+    actor_id: ownerId,
+    actor_role: 'owner',
+    action: parsed.action === 'approve' ? 'rent_payment.approved' : 'rent_payment.rejected',
+    entity_type: 'rent_payment_approval',
+    entity_id: approval.id,
+    metadata: {
+      status: approval.status,
+      tenant_id: approval.tenant_id,
+      cycle_year: approval.cycle_year,
+      cycle_month: approval.cycle_month,
+      rejection_reason: parsed.rejection_reason?.trim() || null,
+    },
+  })
+
+  response.json({
+    ok: true,
+    approval,
+  })
 })
 
 export const processReminders = asyncHandler(async (request: Request, response: Response) => {

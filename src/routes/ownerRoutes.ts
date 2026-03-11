@@ -4,6 +4,7 @@ import {
   createOwnerProperty,
   createOwnerTenant,
   getOwnerNotificationList,
+  getOwnerRentPaymentApprovals,
   getOwnerProperties,
   getOwnerSummary,
   getOwnerTenantById,
@@ -11,6 +12,7 @@ import {
   getOwnerTicketList,
   markOwnerNotificationRead,
   patchOwnerProperty,
+  patchOwnerRentPaymentApproval,
   patchOwnerTenant,
   patchOwnerTicket,
   processReminders,
@@ -42,6 +44,8 @@ export function createOwnerRouter() {
   router.patch('/notifications/:id/read', markOwnerNotificationRead)
 
   router.get('/dashboard-summary', getOwnerSummary)
+  router.get('/rent-payment-approvals', getOwnerRentPaymentApprovals)
+  router.patch('/rent-payment-approvals/:id', patchOwnerRentPaymentApproval)
   router.post('/process-reminders', processReminders)
 
   return router

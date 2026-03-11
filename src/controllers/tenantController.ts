@@ -3,8 +3,10 @@ import type { Request, Response } from 'express'
 import { AppError, asyncHandler } from '../lib/errors.js'
 import { createAuditLog } from '../services/auditLogService.js'
 import { notifyOwnerTicketCreated } from '../services/notificationService.js'
+import { getTenantRentPaymentState as loadTenantRentPaymentState, submitTenantRentPayment } from '../services/rentPaymentService.js'
 import { createTenantTicket, getOwnerContactByTenant, getTenantById, getTenantSummary, listTenantTickets } from '../services/tenantService.js'
 import { nextDueDateFromDay } from '../utils/date.js'
+import { tenantMarkRentPaidSchema } from '../validations/rentPaymentSchemas.js'
 import { createTenantTicketSchema } from '../validations/tenantSchemas.js'
 
 function requireTenantIdentity(request: Request) {
@@ -69,6 +71,52 @@ export const getTenantTickets = asyncHandler(async (request: Request, response: 
   const { tenantId, organizationId } = requireTenantIdentity(request)
   const tickets = await listTenantTickets(tenantId, organizationId)
   response.json({ ok: true, tickets })
+})
+
+export const getTenantRentPaymentState = asyncHandler(async (request: Request, response: Response) => {
+  const { tenantId, organizationId } = requireTenantIdentity(request)
+  const state = await loadTenantRentPaymentState({
+    tenantId,
+    organizationId,
+  })
+
+  response.json({
+    ok: true,
+    state,
+  })
+})
+
+export const postTenantRentPaymentMarkPaid = asyncHandler(async (request: Request, response: Response) => {
+  const { tenantId, ownerId, organizationId } = requireTenantIdentity(request)
+  tenantMarkRentPaidSchema.parse(request.body ?? {})
+
+  const result = await submitTenantRentPayment({
+    tenantId,
+    organizationId,
+  })
+
+  await createAuditLog({
+    organization_id: organizationId,
+    actor_id: tenantId,
+    actor_role: 'tenant',
+    action: 'rent_payment.marked_paid',
+    entity_type: 'rent_payment_approval',
+    entity_id: result.approval.id,
+    metadata: {
+      owner_id: ownerId,
+      cycle_year: result.approval.cycle_year,
+      cycle_month: result.approval.cycle_month,
+      due_date: result.approval.due_date,
+      amount_paid: result.approval.amount_paid,
+      status: result.approval.status,
+    },
+  })
+
+  response.status(201).json({
+    ok: true,
+    approval: result.approval,
+    state: result.state,
+  })
 })
 
 export const postTenantTicket = asyncHandler(async (request: Request, response: Response) => {
