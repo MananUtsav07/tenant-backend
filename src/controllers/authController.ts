@@ -39,6 +39,7 @@ export const registerOwner = asyncHandler(async (request: Request, response: Res
     company_name: parsed.company_name,
     support_email: parsed.support_email,
     support_whatsapp: parsed.support_whatsapp,
+    country_code: parsed.country_code,
   })
 
   const token = signOwnerToken(owner.id, owner.email, owner.organization_id)
@@ -70,6 +71,8 @@ export const registerOwner = asyncHandler(async (request: Request, response: Res
             name: owner.organizations.name,
             slug: owner.organizations.slug,
             plan_code: owner.organizations.plan_code,
+            country_code: owner.organizations.country_code,
+            currency_code: owner.organizations.currency_code,
             created_at: owner.organizations.created_at,
           }
         : null,
@@ -120,6 +123,8 @@ export const loginOwner = asyncHandler(async (request: Request, response: Respon
             name: owner.organizations.name,
             slug: owner.organizations.slug,
             plan_code: owner.organizations.plan_code,
+            country_code: owner.organizations.country_code,
+            currency_code: owner.organizations.currency_code,
             created_at: owner.organizations.created_at,
           }
         : null,
@@ -155,6 +160,8 @@ export const ownerMe = asyncHandler(async (request: Request, response: Response)
             name: owner.organizations.name,
             slug: owner.organizations.slug,
             plan_code: owner.organizations.plan_code,
+            country_code: owner.organizations.country_code,
+            currency_code: owner.organizations.currency_code,
             created_at: owner.organizations.created_at,
           }
         : null,
@@ -245,6 +252,8 @@ export const tenantMe = asyncHandler(async (request: Request, response: Response
             name: tenant.organizations.name,
             slug: tenant.organizations.slug,
             plan_code: tenant.organizations.plan_code,
+            country_code: tenant.organizations.country_code,
+            currency_code: tenant.organizations.currency_code,
             created_at: tenant.organizations.created_at,
           }
         : null,
@@ -264,6 +273,8 @@ export const tenantMe = asyncHandler(async (request: Request, response: Response
           name: tenant.organizations.name,
           slug: tenant.organizations.slug,
           plan_code: tenant.organizations.plan_code,
+          country_code: tenant.organizations.country_code,
+          currency_code: tenant.organizations.currency_code,
           created_at: tenant.organizations.created_at,
         }
       : null,

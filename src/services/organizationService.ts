@@ -44,6 +44,8 @@ export async function createOrganization(input: {
   name: string
   slug?: string
   plan_code?: string | null
+  country_code?: string
+  currency_code?: string
   created_at?: string
 }) {
   const slug = input.slug ?? (await generateUniqueOrganizationSlug(input.name))
@@ -54,6 +56,8 @@ export async function createOrganization(input: {
       name: input.name,
       slug,
       plan_code: input.plan_code ?? 'starter',
+      country_code: input.country_code ?? 'IN',
+      currency_code: input.currency_code ?? 'INR',
       created_at: input.created_at ?? new Date().toISOString(),
     })
     .select('*')

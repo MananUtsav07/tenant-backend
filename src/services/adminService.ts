@@ -124,7 +124,7 @@ export async function listAdminTenants(query: BaseListQuery<TenantListSortBy>) {
   let request = supabaseAdmin
     .from('tenants')
     .select(
-      'id, organization_id, owner_id, property_id, full_name, email, phone, tenant_access_id, monthly_rent, payment_due_day, payment_status, status, created_at, owners(email, company_name), properties(property_name, unit_number), organizations(name, slug, plan_code)',
+      'id, organization_id, owner_id, property_id, full_name, email, phone, tenant_access_id, monthly_rent, payment_due_day, payment_status, status, created_at, owners(email, company_name), properties(property_name, unit_number), organizations(name, slug, plan_code, country_code, currency_code)',
       { count: 'exact' },
     )
     .order(query.sort_by, { ascending: query.sort_order === 'asc' })

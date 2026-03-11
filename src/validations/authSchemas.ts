@@ -1,4 +1,7 @@
 import { z } from 'zod'
+import { supportedCountryCodes } from '../config/countryCurrency.js'
+
+const countryCodeSchema = z.enum(supportedCountryCodes)
 
 export const ownerRegisterSchema = z.object({
   email: z.string().email().transform((value) => value.trim().toLowerCase()),
@@ -7,6 +10,7 @@ export const ownerRegisterSchema = z.object({
   company_name: z.string().trim().min(1).max(200).optional(),
   support_email: z.string().email().optional(),
   support_whatsapp: z.string().trim().min(5).max(30).optional(),
+  country_code: countryCodeSchema,
 })
 
 export const ownerLoginSchema = z.object({

@@ -13,7 +13,7 @@ function throwIfError(error: PostgrestError | null, message: string): void {
 export async function findTenantByAccessId(tenantAccessId: string) {
   const { data, error } = await supabaseAdmin
     .from('tenants')
-    .select('*, owners(*), organizations(id, name, slug, plan_code, created_at)')
+    .select('*, owners(*), organizations(id, name, slug, plan_code, country_code, currency_code, created_at)')
     .eq('tenant_access_id', tenantAccessId)
     .maybeSingle()
 
@@ -24,7 +24,7 @@ export async function findTenantByAccessId(tenantAccessId: string) {
 export async function getTenantById(tenantId: string, organizationId?: string) {
   let request = supabaseAdmin
     .from('tenants')
-    .select('*, owners(*), properties(*), organizations(id, name, slug, plan_code, created_at)')
+    .select('*, owners(*), properties(*), organizations(id, name, slug, plan_code, country_code, currency_code, created_at)')
     .eq('id', tenantId)
 
   if (organizationId) {

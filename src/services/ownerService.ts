@@ -2,6 +2,7 @@ import type { PostgrestError } from '@supabase/supabase-js'
 
 import { AppError } from '../lib/errors.js'
 import { supabaseAdmin } from '../lib/supabase.js'
+import { resolveCurrencyCode, type SupportedCountryCode } from '../config/countryCurrency.js'
 import { generateTenantAccessId } from '../utils/ids.js'
 import { isTicketSummarizationEnabled } from './ai/featureFlags.js'
 import { createOrganization, upsertOwnerMembership } from './organizationService.js'
@@ -15,7 +16,7 @@ function throwIfError(error: PostgrestError | null, message: string): void {
 export async function findOwnerByEmail(email: string) {
   const { data, error } = await supabaseAdmin
     .from('owners')
-    .select('*, organizations(id, name, slug, plan_code, created_at)')
+    .select('*, organizations(id, name, slug, plan_code, country_code, currency_code, created_at)')
     .eq('email', email)
     .maybeSingle()
 
@@ -30,6 +31,7 @@ export async function createOwner(input: {
   company_name?: string
   support_email?: string
   support_whatsapp?: string
+  country_code: SupportedCountryCode
   organization_id?: string
 }) {
   const organizationName =
@@ -41,6 +43,8 @@ export async function createOwner(input: {
       : await createOrganization({
           name: organizationName,
           plan_code: 'starter',
+          country_code: input.country_code,
+          currency_code: resolveCurrencyCode(input.country_code),
         })
 
   try {
@@ -55,7 +59,7 @@ export async function createOwner(input: {
         support_whatsapp: input.support_whatsapp ?? null,
         organization_id: organization.id,
       })
-      .select('*, organizations(id, name, slug, plan_code, created_at)')
+      .select('*, organizations(id, name, slug, plan_code, country_code, currency_code, created_at)')
       .single()
 
     throwIfError(error, 'Failed to create owner')
@@ -78,7 +82,7 @@ export async function createOwner(input: {
 export async function getOwnerById(ownerId: string, organizationId?: string) {
   let request = supabaseAdmin
     .from('owners')
-    .select('*, organizations(id, name, slug, plan_code, created_at)')
+    .select('*, organizations(id, name, slug, plan_code, country_code, currency_code, created_at)')
     .eq('id', ownerId)
 
   if (organizationId) {
