@@ -25,12 +25,19 @@ function readStartToken(text: string | undefined): string | null {
   }
 
   const trimmed = text.trim()
-  if (!trimmed.startsWith('/start')) {
+  if (!trimmed.toLowerCase().startsWith('/start')) {
     return null
   }
 
-  const parts = trimmed.split(/\s+/)
-  return parts[1] ?? null
+  const commandPattern = /^\/start(?:@[a-z0-9_]+)?(?:\s+|=)([\s\S]+)$/i
+  const matched = trimmed.match(commandPattern)
+  if (!matched || typeof matched[1] !== 'string') {
+    return null
+  }
+
+  // Telegram clients can wrap long payloads; JWT payload never contains whitespace.
+  const normalizedToken = matched[1].replace(/\s+/g, '')
+  return normalizedToken.length > 0 ? normalizedToken : null
 }
 
 export const postTelegramWebhook = asyncHandler(async (request: Request, response: Response) => {
