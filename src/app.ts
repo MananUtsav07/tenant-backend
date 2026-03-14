@@ -10,6 +10,7 @@ import { requestContext } from './middleware/requestContext.js'
 import { createAdminRouter } from './routes/adminRoutes.js'
 import { createAuthRouter } from './routes/authRoutes.js'
 import { createBlogRouter } from './routes/blogRoutes.js'
+import { createInternalRouter } from './routes/internalRoutes.js'
 import { createOwnerAiRouter } from './routes/ownerAiRoutes.js'
 import { createOwnerRouter } from './routes/ownerRoutes.js'
 import { createPublicRouter } from './routes/publicRoutes.js'
@@ -89,6 +90,7 @@ export function createApp() {
   app.use('/api/public', publicRateLimit, createPublicRouter())
   app.use('/api/blog', publicRateLimit, createBlogRouter())
   app.use('/api/admin', authRateLimit, createAdminRouter())
+  app.use('/api/internal', createInternalRouter())
   app.use('/api/owner', createOwnerAiRouter())
   app.use('/api/owners', createOwnerRouter())
   app.use('/api/tenants', tenantRateLimit, createTenantRouter())

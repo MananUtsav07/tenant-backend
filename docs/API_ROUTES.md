@@ -63,7 +63,8 @@ Body:
   "full_name": "John Owner",
   "company_name": "Skyline PM",
   "support_email": "support@example.com",
-  "support_whatsapp": "+919876543210"
+  "support_whatsapp": "+919876543210",
+  "country_code": "AE"
 }
 ```
 
@@ -168,6 +169,24 @@ Returns:
 - `reminder_generation_enabled_count`
 - `ticket_summarization_enabled_count`
 
+### GET `/api/admin/automations/health`
+Returns queue health, latest run, and latest error.
+
+### GET `/api/admin/automations/runs`
+Query params:
+- `page`
+- `page_size`
+- `flow_name` (optional)
+- `status` (`success` | `failed` | `partial`, optional)
+- `organization_id` (optional UUID)
+
+### GET `/api/admin/automations/errors`
+Query params:
+- `page`
+- `page_size`
+- `flow_name` (optional)
+- `organization_id` (optional UUID)
+
 ### GET `/api/admin/blog`
 ### POST `/api/admin/blog`
 ### PUT `/api/admin/blog/:id`
@@ -232,6 +251,15 @@ Response:
 ### POST `/api/owners/process-reminders`
 Generates reminder rows for active tenants and creates owner notifications for currently due reminders.
 
+### GET `/api/owners/automation/settings`
+Returns current owner automation settings. Defaults are returned when no settings row exists.
+
+### PUT `/api/owners/automation/settings`
+Updates owner automation settings.
+
+### GET `/api/owners/automation/activity`
+Returns automation run history for the owner's organization.
+
 ## Owner AI Settings (Preparation Mode)
 All routes below require owner token.
 
@@ -288,10 +316,20 @@ Body:
 ### GET `/api/tenants/owner-contact`
 Returns support email + WhatsApp.
 
+## Internal Scheduler Routes
+Use header `x-internal-automation-key` (or bearer token) with `INTERNAL_AUTOMATION_KEY`.
+
+### POST `/api/internal/automation/tick`
+Enqueues daily automation jobs and optionally dispatches pending jobs.
+
+### POST `/api/internal/automation/dispatch`
+Dispatches pending automation jobs only.
+
 ## Notes
 - Owner and tenant auth are isolated JWT flows and include `organization_id` in JWT payload.
 - Admin JWT flow is isolated with `role: "admin"` tokens.
 - Creating a support ticket writes an owner notification and attempts owner email delivery.
 - Reminder processing is manual for now and cron-ready.
+- Internal automation foundation now supports queue-based scheduled workflows.
 - Owner/Tenant resource routes are organization-scoped; cross-organization access is blocked.
 - AI module endpoints are infrastructure-only in this phase; no AI workflow is active yet.

@@ -40,6 +40,33 @@ type PublicContactNotificationPayload = {
   createdAt: string
 }
 
+type OwnerComplianceAlertNotificationPayload = {
+  to: string
+  ownerName: string
+  propertyName: string | null
+  unitNumber: string | null
+  tenantName: string | null
+  tenantAccessId: string | null
+  daysRemaining: number
+  threshold: number
+  ejariExpiryLabel: string
+  contractEndLabel: string
+}
+
+type OwnerPortfolioSummaryNotificationPayload = {
+  to: string
+  ownerName: string
+  summary: {
+    active_tenants: number
+    open_tickets: number
+    overdue_rent: number
+    reminders_pending: number
+    unread_notifications: number
+    awaiting_approvals: number
+  }
+  generatedAtLabel: string
+}
+
 export async function sendOwnerTicketNotification(payload: TicketNotificationPayload) {
   const propertyLabel = payload.propertyName?.trim() || 'Not provided'
   const unitLabel = payload.unitNumber?.trim() || 'Not provided'
@@ -100,6 +127,55 @@ export async function sendPublicContactNotification(payload: PublicContactNotifi
       '',
       'Message:',
       payload.message,
+    ].join('\n'),
+  })
+}
+
+export async function sendOwnerComplianceAlertNotification(payload: OwnerComplianceAlertNotificationPayload) {
+  const propertyLabel = payload.propertyName?.trim() || 'Not provided'
+  const unitLabel = payload.unitNumber?.trim() || 'Not provided'
+  const tenantLabel = payload.tenantName?.trim() || 'Not provided'
+  const tenantAccessLabel = payload.tenantAccessId?.trim() || 'Not provided'
+
+  await transporter.sendMail({
+    from: env.EMAIL_USER,
+    to: payload.to,
+    subject: `Compliance Alert: Action required in ${payload.daysRemaining} days`,
+    text: [
+      `Hello ${payload.ownerName},`,
+      '',
+      `A legal/compliance milestone is within ${payload.threshold} days.`,
+      `Days Remaining: ${payload.daysRemaining}`,
+      `Property: ${propertyLabel}`,
+      `Unit: ${unitLabel}`,
+      `Tenant: ${tenantLabel} (${tenantAccessLabel})`,
+      `Ejari Expiry: ${payload.ejariExpiryLabel}`,
+      `Contract End: ${payload.contractEndLabel}`,
+      '',
+      'Please review renewal or legal notice actions in your owner dashboard.',
+    ].join('\n'),
+  })
+}
+
+export async function sendOwnerPortfolioSummaryNotification(payload: OwnerPortfolioSummaryNotificationPayload) {
+  await transporter.sendMail({
+    from: env.EMAIL_USER,
+    to: payload.to,
+    subject: 'Daily Portfolio Brief',
+    text: [
+      `Hello ${payload.ownerName},`,
+      '',
+      'Here is your latest operations snapshot:',
+      `Active Tenants: ${payload.summary.active_tenants}`,
+      `Open Tickets: ${payload.summary.open_tickets}`,
+      `Overdue Rent: ${payload.summary.overdue_rent}`,
+      `Reminders Pending: ${payload.summary.reminders_pending}`,
+      `Unread Notifications: ${payload.summary.unread_notifications}`,
+      `Awaiting Approvals: ${payload.summary.awaiting_approvals}`,
+      '',
+      `Generated At: ${payload.generatedAtLabel}`,
+      '',
+      'Log in to your owner dashboard for details.',
     ].join('\n'),
   })
 }

@@ -4,6 +4,8 @@ import {
   createOwnerProperty,
   createOwnerTenant,
   getOwnerNotificationList,
+  getOwnerAutomationActivityController,
+  getOwnerAutomationSettingsController,
   getOwnerRentPaymentApprovals,
   getOwnerProperties,
   getOwnerSummary,
@@ -16,6 +18,7 @@ import {
   patchOwnerTenant,
   patchOwnerTicket,
   processReminders,
+  putOwnerAutomationSettingsController,
   removeOwnerProperty,
   removeOwnerTenant,
 } from '../controllers/ownerController.js'
@@ -47,6 +50,9 @@ export function createOwnerRouter() {
   router.get('/rent-payment-approvals', getOwnerRentPaymentApprovals)
   router.patch('/rent-payment-approvals/:id', patchOwnerRentPaymentApproval)
   router.post('/process-reminders', processReminders)
+  router.get('/automation/settings', getOwnerAutomationSettingsController)
+  router.put('/automation/settings', putOwnerAutomationSettingsController)
+  router.get('/automation/activity', getOwnerAutomationActivityController)
 
   return router
 }

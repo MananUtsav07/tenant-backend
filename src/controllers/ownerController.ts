@@ -4,6 +4,7 @@ import type { Request, Response } from 'express'
 import { AppError, asyncHandler } from '../lib/errors.js'
 import { requireOrganizationContext } from '../middleware/organizationContext.js'
 import { createAuditLog } from '../services/auditLogService.js'
+import { getOwnerAutomationSettings, listOwnerAutomationActivity, updateOwnerAutomationSettings } from '../services/ownerAutomationService.js'
 import {
   createProperty,
   createTenant,
@@ -25,6 +26,7 @@ import { processOwnerReminders } from '../services/reminderService.js'
 import { listOwnerAwaitingRentPaymentApprovals, reviewOwnerRentPaymentApproval } from '../services/rentPaymentService.js'
 import { createTenantSchema, createPropertySchema, updatePropertySchema, updateTenantSchema, updateTicketStatusSchema } from '../validations/ownerSchemas.js'
 import { ownerReviewRentPaymentSchema } from '../validations/rentPaymentSchemas.js'
+import { ownerAutomationActivityQuerySchema, ownerAutomationSettingsUpdateSchema } from '../validations/automationSchemas.js'
 
 function requireOwnerContext(request: Request): { ownerId: string; organizationId: string } {
   const ownerId = request.owner?.ownerId
@@ -366,4 +368,61 @@ export const processReminders = asyncHandler(async (request: Request, response: 
   })
 
   response.json({ ok: true, result })
+})
+
+export const getOwnerAutomationSettingsController = asyncHandler(async (request: Request, response: Response) => {
+  const { ownerId, organizationId } = requireOwnerContext(request)
+  const settings = await getOwnerAutomationSettings(ownerId, organizationId)
+
+  response.json({
+    ok: true,
+    settings,
+  })
+})
+
+export const putOwnerAutomationSettingsController = asyncHandler(async (request: Request, response: Response) => {
+  const { ownerId, organizationId } = requireOwnerContext(request)
+  const parsed = ownerAutomationSettingsUpdateSchema.parse(request.body ?? {})
+
+  if (Object.keys(parsed).length === 0) {
+    throw new AppError('No automation settings provided', 400)
+  }
+
+  const settings = await updateOwnerAutomationSettings(ownerId, organizationId, parsed)
+  await createAuditLog({
+    organization_id: organizationId,
+    actor_id: ownerId,
+    actor_role: 'owner',
+    action: 'automation.settings_updated',
+    entity_type: 'owner_automation_settings',
+    entity_id: settings.id,
+    metadata: parsed,
+  })
+
+  response.json({
+    ok: true,
+    settings,
+  })
+})
+
+export const getOwnerAutomationActivityController = asyncHandler(async (request: Request, response: Response) => {
+  const { ownerId, organizationId } = requireOwnerContext(request)
+  const parsed = ownerAutomationActivityQuerySchema.parse(request.query)
+  const listed = await listOwnerAutomationActivity({
+    ownerId,
+    organizationId,
+    page: parsed.page,
+    page_size: parsed.page_size,
+  })
+
+  response.json({
+    ok: true,
+    items: listed.items,
+    pagination: {
+      page: parsed.page,
+      page_size: parsed.page_size,
+      total: listed.total,
+      total_pages: Math.max(1, Math.ceil(listed.total / parsed.page_size)),
+    },
+  })
 })

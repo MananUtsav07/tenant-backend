@@ -24,6 +24,7 @@ const envSchema = z.object({
   EMAIL_USER: z.string().email(),
   EMAIL_PASS: z.string().min(3),
   OPENAI_API_KEY: optionalNonEmptyString,
+  INTERNAL_AUTOMATION_KEY: optionalNonEmptyString,
   FRONTEND_URL: z.string().url(),
   ALLOWED_ORIGINS: z.string().optional(),
 })

@@ -43,6 +43,7 @@ Required vars:
 - `EMAIL_USER`
 - `EMAIL_PASS`
 - `OPENAI_API_KEY` (optional until AI rollout)
+- `INTERNAL_AUTOMATION_KEY` (required for internal scheduler endpoints)
 - `FRONTEND_URL`
 - `ALLOWED_ORIGINS`
 
@@ -71,6 +72,7 @@ This backend is configured for Vercel serverless deployment.
    - `EMAIL_USER`
    - `EMAIL_PASS`
    - `OPENAI_API_KEY` (optional)
+   - `INTERNAL_AUTOMATION_KEY`
    - `FRONTEND_URL` (your frontend Vercel URL)
    - `ALLOWED_ORIGINS` (comma-separated list; include your frontend URL)
 4. Deploy and verify health:
@@ -87,6 +89,9 @@ Run migrations in Supabase SQL editor, in order:
 - `supabase/migrations/007_ai_infrastructure.sql`
 - `supabase/migrations/008_remove_stripe_integration.sql`
 - `supabase/migrations/009_seed_additional_admin_users.sql`
+- `supabase/migrations/010_organization_country_currency.sql`
+- `supabase/migrations/011_rent_payment_approvals.sql`
+- `supabase/migrations/012_automation_foundation.sql`
 
 Seeded admin (development):
 - email: `admin@tenantflow.app`
@@ -126,11 +131,24 @@ Seeded admin (development):
   - `GET /api/admin/tickets`
   - `GET /api/admin/contact-messages`
   - `GET /api/admin/analytics`
+  - `GET /api/admin/automations/health`
+  - `GET /api/admin/automations/runs`
+  - `GET /api/admin/automations/errors`
   - Blog management: `GET/POST/PUT/DELETE /api/admin/blog...`
 
 ## Reminder Processing
 - `POST /api/owners/process-reminders` creates and processes reminder records around rent due dates.
 - Reminder notifications are added to owner notifications when reminder time has arrived.
+
+## Automation Foundation
+- Owner automation settings/activity:
+  - `GET /api/owners/automation/settings`
+  - `PUT /api/owners/automation/settings`
+  - `GET /api/owners/automation/activity`
+- Internal scheduler endpoints:
+  - `POST /api/internal/automation/tick`
+  - `POST /api/internal/automation/dispatch`
+  - Auth: `x-internal-automation-key` or `Authorization: Bearer <INTERNAL_AUTOMATION_KEY>`
 
 ## AI Infrastructure (Preparation Mode)
 - AI service scaffolding is under `src/services/ai`.

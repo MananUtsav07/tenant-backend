@@ -5,6 +5,9 @@ import {
   deleteAdminBlogPostById,
   getAdminAnalytics,
   getAdminAiStatus,
+  getAdminAutomationErrors,
+  getAdminAutomationHealth,
+  getAdminAutomationRuns,
   getAdminBlogPosts,
   getAdminContactMessages,
   getAdminDashboard,
@@ -39,6 +42,9 @@ export function createAdminRouter() {
   router.get('/contact-messages', getAdminContactMessages)
   router.get('/analytics', getAdminAnalytics)
   router.get('/ai-status', getAdminAiStatus)
+  router.get('/automations/health', getAdminAutomationHealth)
+  router.get('/automations/runs', getAdminAutomationRuns)
+  router.get('/automations/errors', getAdminAutomationErrors)
   router.get('/system-health', getAdminSystemHealth)
 
   router.get('/blog', getAdminBlogPosts)

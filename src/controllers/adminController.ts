@@ -4,6 +4,7 @@ import type { Request, Response } from 'express'
 import { AppError, asyncHandler } from '../lib/errors.js'
 import { signAdminToken } from '../lib/jwt.js'
 import { getAdminAiStatusSummary } from '../services/ai/aiConfigService.js'
+import { getAutomationHealth, listAutomationErrors, listAutomationRuns } from '../services/automationEngineService.js'
 import {
   findAdminByEmail,
   getAdminOrganizationDetail,
@@ -31,6 +32,7 @@ import {
   adminOrganizationListQuerySchema,
 } from '../validations/adminSchemas.js'
 import { adminBlogListQuerySchema, createBlogPostSchema, updateBlogPostSchema } from '../validations/blogSchemas.js'
+import { adminAutomationErrorsQuerySchema, adminAutomationRunsQuerySchema } from '../validations/automationSchemas.js'
 
 function requireAdminId(request: Request): string {
   const adminId = request.admin?.adminId
@@ -230,6 +232,45 @@ export const getAdminAiStatus = asyncHandler(async (_request: Request, response:
   response.json({
     ok: true,
     status,
+  })
+})
+
+export const getAdminAutomationHealth = asyncHandler(async (_request: Request, response: Response) => {
+  const health = await getAutomationHealth()
+  response.json({
+    ok: true,
+    health,
+  })
+})
+
+export const getAdminAutomationRuns = asyncHandler(async (request: Request, response: Response) => {
+  const parsed = adminAutomationRunsQuerySchema.parse(request.query)
+  const listed = await listAutomationRuns(parsed)
+
+  response.json({
+    ok: true,
+    items: listed.items,
+    pagination: paginationPayload(parsed.page, parsed.page_size, listed.total),
+    filters: {
+      flow_name: parsed.flow_name ?? null,
+      status: parsed.status ?? null,
+      organization_id: parsed.organization_id ?? null,
+    },
+  })
+})
+
+export const getAdminAutomationErrors = asyncHandler(async (request: Request, response: Response) => {
+  const parsed = adminAutomationErrorsQuerySchema.parse(request.query)
+  const listed = await listAutomationErrors(parsed)
+
+  response.json({
+    ok: true,
+    items: listed.items,
+    pagination: paginationPayload(parsed.page, parsed.page_size, listed.total),
+    filters: {
+      flow_name: parsed.flow_name ?? null,
+      organization_id: parsed.organization_id ?? null,
+    },
   })
 })
 
