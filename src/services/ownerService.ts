@@ -409,28 +409,43 @@ export async function updateOwnerTicket(organizationId: string, ticketId: string
   return data
 }
 
-export async function listOwnerNotifications(organizationId: string) {
+export async function listOwnerNotifications(organizationId: string, ownerId: string) {
   const { data, error } = await supabaseAdmin
     .from('owner_notifications')
     .select('*, tenants(id, full_name, tenant_access_id)')
     .eq('organization_id', organizationId)
+    .eq('owner_id', ownerId)
     .order('created_at', { ascending: false })
 
   throwIfError(error, 'Failed to list notifications')
   return data ?? []
 }
 
-export async function markNotificationRead(organizationId: string, notificationId: string) {
+export async function markNotificationRead(organizationId: string, ownerId: string, notificationId: string) {
   const { data, error } = await supabaseAdmin
     .from('owner_notifications')
     .update({ is_read: true })
     .eq('id', notificationId)
     .eq('organization_id', organizationId)
+    .eq('owner_id', ownerId)
     .select('*')
     .maybeSingle()
 
   throwIfError(error, 'Failed to update notification')
   return data
+}
+
+export async function markAllNotificationsRead(organizationId: string, ownerId: string) {
+  const { data, error } = await supabaseAdmin
+    .from('owner_notifications')
+    .update({ is_read: true })
+    .eq('organization_id', organizationId)
+    .eq('owner_id', ownerId)
+    .eq('is_read', false)
+    .select('id')
+
+  throwIfError(error, 'Failed to mark notifications as read')
+  return (data ?? []).length
 }
 
 export async function createOwnerNotification(input: {
@@ -479,6 +494,7 @@ export async function getOwnerDashboardSummary(organizationId: string, ownerId?:
       .from('owner_notifications')
       .select('id', { count: 'exact', head: true })
       .eq('organization_id', organizationId)
+      .eq('owner_id', ownerId ?? '')
       .eq('is_read', false),
   ])
 

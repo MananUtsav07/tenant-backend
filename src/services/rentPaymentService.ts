@@ -3,7 +3,7 @@ import type { PostgrestError } from '@supabase/supabase-js'
 import { AppError } from '../lib/errors.js'
 import { supabaseAdmin } from '../lib/supabase.js'
 import { addDays } from '../utils/date.js'
-import { notifyOwnerRentPaymentAwaitingApproval } from './notificationService.js'
+import { notifyOwnerRentPaymentAwaitingApproval, notifyTenantRentPaymentReviewed } from './notificationService.js'
 import { getTenantById } from './tenantService.js'
 
 export type RentPaymentApprovalStatus = 'awaiting_owner_approval' | 'approved' | 'rejected'
@@ -344,11 +344,38 @@ export async function reviewOwnerRentPaymentApproval(input: {
     .eq('organization_id', input.organizationId)
     .eq('owner_id', input.ownerId)
     .select(
-      'id, organization_id, owner_id, tenant_id, property_id, cycle_year, cycle_month, due_date, amount_paid, status, rejection_reason, reviewed_by_owner_id, reviewed_at, created_at, updated_at, tenants(full_name, tenant_access_id), properties(property_name, unit_number)',
+      'id, organization_id, owner_id, tenant_id, property_id, cycle_year, cycle_month, due_date, amount_paid, status, rejection_reason, reviewed_by_owner_id, reviewed_at, created_at, updated_at, tenants(full_name, tenant_access_id, email), properties(property_name, unit_number)',
     )
     .single()
 
   throwIfError(error, 'Failed to review rent payment approval')
+  if (!data) {
+    throw new AppError('Failed to review rent payment approval', 500)
+  }
+
+  const reviewedTenant = await getTenantById(data.tenant_id as string, input.organizationId)
+
+  await notifyTenantRentPaymentReviewed({
+    organizationId: input.organizationId,
+    ownerId: input.ownerId,
+    tenantId: data.tenant_id as string,
+    tenantEmail: reviewedTenant?.email ?? ((data.tenants as { email?: string | null } | null)?.email ?? null),
+    tenantName: (data.tenants as { full_name?: string | null } | null)?.full_name ?? reviewedTenant?.full_name ?? 'Resident',
+    propertyName:
+      (data.properties as { property_name?: string | null } | null)?.property_name ??
+      reviewedTenant?.properties?.property_name ??
+      null,
+    unitNumber:
+      (data.properties as { unit_number?: string | null } | null)?.unit_number ??
+      reviewedTenant?.properties?.unit_number ??
+      null,
+    dueDateIso: data.due_date as string,
+    amountPaid: Number(data.amount_paid ?? 0),
+    currencyCode: reviewedTenant?.organizations?.currency_code ?? 'INR',
+    status: input.action === 'approve' ? 'approved' : 'rejected',
+    rejectionReason: input.action === 'reject' ? (data.rejection_reason as string | null) ?? null : null,
+  })
+
   return data
 }
 

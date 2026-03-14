@@ -22,7 +22,7 @@ Body:
 ```json
 {
   "name": "Alex Morgan",
-  "email": "alex@example.com",
+  "email": "support@prophives.com",
   "message": "I want a demo for a 40-property portfolio."
 }
 ```
@@ -58,11 +58,11 @@ Body:
 Body:
 ```json
 {
-  "email": "owner@example.com",
+  "email": "support@prophives.com",
   "password": "Password@123",
   "full_name": "John Owner",
   "company_name": "Skyline PM",
-  "support_email": "support@example.com",
+  "support_email": "support@prophives.com",
   "support_whatsapp": "+919876543210",
   "country_code": "AE"
 }
@@ -72,7 +72,7 @@ Body:
 Body:
 ```json
 {
-  "email": "owner@example.com",
+  "email": "support@prophives.com",
   "password": "Password@123"
 }
 ```
@@ -88,7 +88,7 @@ Body:
 {
   "tenant_access_id": "TEN-AB12CD34",
   "password": "Tenant@123",
-  "email": "tenant@example.com"
+  "email": "support@prophives.com"
 }
 ```
 
@@ -114,7 +114,7 @@ Returns a single published blog post.
 Body:
 ```json
 {
-  "email": "admin@tenantflow.app",
+  "email": "support@prophives.com",
   "password": "Admin@12345"
 }
 ```
@@ -206,7 +206,7 @@ Body:
 {
   "property_id": "<uuid>",
   "full_name": "Tenant Name",
-  "email": "tenant@example.com",
+  "email": "support@prophives.com",
   "phone": "+919999999999",
   "password": "Tenant@123",
   "lease_start_date": "2026-03-01",

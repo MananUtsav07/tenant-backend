@@ -56,7 +56,7 @@ alter table public.analytics_events enable row level security;
 
 insert into public.admin_users (email, password_hash, full_name)
 values (
-  'admin@tenantflow.app',
+  'support@prophives.com',
   crypt('Admin@12345', gen_salt('bf')),
   'TenantFlow Admin'
 )

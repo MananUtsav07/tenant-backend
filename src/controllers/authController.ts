@@ -5,8 +5,24 @@ import { AppError, asyncHandler } from '../lib/errors.js'
 import { signOwnerToken, signTenantToken } from '../lib/jwt.js'
 import { createAnalyticsEvent } from '../services/analyticsService.js'
 import { findOwnerByEmail, createOwner, getOwnerById } from '../services/ownerService.js'
+import {
+  requestOwnerPasswordReset,
+  requestTenantPasswordReset,
+  resetOwnerPassword,
+  resetTenantPassword,
+} from '../services/passwordResetService.js'
 import { findTenantByAccessId, getTenantById } from '../services/tenantService.js'
-import { ownerLoginSchema, ownerRegisterSchema, tenantLoginSchema } from '../validations/authSchemas.js'
+import {
+  ownerForgotPasswordSchema,
+  ownerLoginSchema,
+  ownerRegisterSchema,
+  passwordResetConfirmSchema,
+  tenantForgotPasswordSchema,
+  tenantLoginSchema,
+} from '../validations/authSchemas.js'
+
+const passwordResetRequestSuccessMessage =
+  'If the account details match our records, a password reset email will arrive shortly.'
 
 async function trackAnalyticsSafe(input: {
   event_name: string
@@ -278,5 +294,54 @@ export const tenantMe = asyncHandler(async (request: Request, response: Response
           created_at: tenant.organizations.created_at,
         }
       : null,
+  })
+})
+
+export const postOwnerForgotPassword = asyncHandler(async (request: Request, response: Response) => {
+  const parsed = ownerForgotPasswordSchema.parse(request.body)
+  await requestOwnerPasswordReset(parsed.email)
+
+  response.json({
+    ok: true,
+    message: passwordResetRequestSuccessMessage,
+  })
+})
+
+export const postOwnerResetPassword = asyncHandler(async (request: Request, response: Response) => {
+  const parsed = passwordResetConfirmSchema.parse(request.body)
+  await resetOwnerPassword({
+    token: parsed.token,
+    password: parsed.password,
+  })
+
+  response.json({
+    ok: true,
+    message: 'Your owner password has been updated. You can now sign in with the new password.',
+  })
+})
+
+export const postTenantForgotPassword = asyncHandler(async (request: Request, response: Response) => {
+  const parsed = tenantForgotPasswordSchema.parse(request.body)
+  await requestTenantPasswordReset({
+    tenantAccessId: parsed.tenant_access_id,
+    email: parsed.email,
+  })
+
+  response.json({
+    ok: true,
+    message: passwordResetRequestSuccessMessage,
+  })
+})
+
+export const postTenantResetPassword = asyncHandler(async (request: Request, response: Response) => {
+  const parsed = passwordResetConfirmSchema.parse(request.body)
+  await resetTenantPassword({
+    token: parsed.token,
+    password: parsed.password,
+  })
+
+  response.json({
+    ok: true,
+    message: 'Your resident password has been updated. You can now sign in with the new password.',
   })
 })

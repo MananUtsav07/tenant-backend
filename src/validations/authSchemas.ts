@@ -22,6 +22,24 @@ export const tenantLoginSchema = z
   .object({
     tenant_access_id: z.string().trim().min(4),
     password: z.string().min(1),
-    email: z.string().email().optional(),
+    email: z.string().email().transform((value) => value.trim().toLowerCase()).optional(),
+  })
+  .strict()
+
+export const ownerForgotPasswordSchema = z.object({
+  email: z.string().email().transform((value) => value.trim().toLowerCase()),
+})
+
+export const tenantForgotPasswordSchema = z
+  .object({
+    tenant_access_id: z.string().trim().min(4),
+    email: z.string().email().transform((value) => value.trim().toLowerCase()),
+  })
+  .strict()
+
+export const passwordResetConfirmSchema = z
+  .object({
+    token: z.string().trim().min(20),
+    password: z.string().min(8),
   })
   .strict()

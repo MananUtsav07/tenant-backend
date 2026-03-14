@@ -56,6 +56,7 @@ const envSchema = z.object({
   TELEGRAM_BOT_USERNAME: optionalNonEmptyString,
   TELEGRAM_WEBHOOK_SECRET: optionalNonEmptyString,
   TELEGRAM_ONBOARDING_TOKEN_TTL_MINUTES: z.coerce.number().int().min(5).max(120).default(30),
+  PASSWORD_RESET_TOKEN_TTL_MINUTES: z.coerce.number().int().min(15).max(1440).default(60),
   INTERNAL_AUTOMATION_KEY: optionalNonEmptyString,
   FRONTEND_URL: z.string().url(),
   ALLOWED_ORIGINS: z.string().optional(),

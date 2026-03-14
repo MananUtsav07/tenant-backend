@@ -4,6 +4,7 @@ import type { Request, Response } from 'express'
 import { AppError, asyncHandler } from '../lib/errors.js'
 import { requireOrganizationContext } from '../middleware/organizationContext.js'
 import { createAuditLog } from '../services/auditLogService.js'
+import { notifyTenantAccountProvisioned } from '../services/notificationService.js'
 import { getOwnerAutomationSettings, listOwnerAutomationActivity, updateOwnerAutomationSettings } from '../services/ownerAutomationService.js'
 import {
   createProperty,
@@ -11,12 +12,14 @@ import {
   deleteProperty,
   deleteTenant,
   getOwnerDashboardSummary,
+  getOwnerById,
   getPropertyForOwner,
   getTenantDetailAggregate,
   listOwnerNotifications,
   listOwnerTickets,
   listProperties,
   listTenants,
+  markAllNotificationsRead,
   markNotificationRead,
   updateOwnerTicket,
   updateProperty,
@@ -139,6 +142,7 @@ export const createOwnerTenant = asyncHandler(async (request: Request, response:
   }
 
   const passwordHash = await bcrypt.hash(parsed.password, 10)
+  const owner = await getOwnerById(ownerId, organizationId)
 
   const tenant = await createTenant({
     ownerId,
@@ -166,6 +170,25 @@ export const createOwnerTenant = asyncHandler(async (request: Request, response:
     entity_type: 'tenant',
     entity_id: tenant.id,
     metadata: { full_name: tenant.full_name, property_id: tenant.property_id },
+  })
+
+  void notifyTenantAccountProvisioned({
+    organizationId,
+    ownerId,
+    tenantId: tenant.id,
+    tenantName: tenant.full_name,
+    tenantEmail: tenant.email ?? null,
+    tenantAccessId: tenant.tenant_access_id,
+    temporaryPassword: parsed.password,
+    propertyName: property.property_name ?? null,
+    unitNumber: property.unit_number ?? null,
+  }).catch((error) => {
+    console.error('[createOwnerTenant] tenant onboarding email failed', {
+      tenantId: tenant.id,
+      tenantAccessId: tenant.tenant_access_id,
+      ownerEmail: owner?.email ?? request.owner?.email ?? null,
+      error,
+    })
   })
 
   response.status(201).json({ ok: true, tenant })
@@ -274,8 +297,8 @@ export const patchOwnerTicket = asyncHandler(async (request: Request, response: 
 })
 
 export const getOwnerNotificationList = asyncHandler(async (request: Request, response: Response) => {
-  const organizationId = requireOrganizationContext(request)
-  const notifications = await listOwnerNotifications(organizationId)
+  const { ownerId, organizationId } = requireOwnerContext(request)
+  const notifications = await listOwnerNotifications(organizationId, ownerId)
   response.json({ ok: true, notifications })
 })
 
@@ -283,7 +306,7 @@ export const markOwnerNotificationRead = asyncHandler(async (request: Request, r
   const { ownerId, organizationId } = requireOwnerContext(request)
   const notificationId = readPathId(request, 'id')
 
-  const notification = await markNotificationRead(organizationId, notificationId)
+  const notification = await markNotificationRead(organizationId, ownerId, notificationId)
   if (!notification) {
     throw new AppError('Notification not found in your organization', 404)
   }
@@ -298,6 +321,22 @@ export const markOwnerNotificationRead = asyncHandler(async (request: Request, r
   })
 
   response.json({ ok: true, notification })
+})
+
+export const markAllOwnerNotificationsRead = asyncHandler(async (request: Request, response: Response) => {
+  const { ownerId, organizationId } = requireOwnerContext(request)
+  const updatedCount = await markAllNotificationsRead(organizationId, ownerId)
+
+  await createAuditLog({
+    organization_id: organizationId,
+    actor_id: ownerId,
+    actor_role: 'owner',
+    action: 'notification.mark_all_read',
+    entity_type: 'owner_notification',
+    metadata: { updated_count: updatedCount },
+  })
+
+  response.json({ ok: true, updated_count: updatedCount })
 })
 
 export const getOwnerSummary = asyncHandler(async (request: Request, response: Response) => {

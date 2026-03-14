@@ -94,7 +94,7 @@ Run migrations in Supabase SQL editor, in order:
 - `supabase/migrations/012_automation_foundation.sql`
 
 Seeded admin (development):
-- email: `admin@tenantflow.app`
+- email: `support@prophives.com`
 - password: `Admin@12345`
 
 ## Public API

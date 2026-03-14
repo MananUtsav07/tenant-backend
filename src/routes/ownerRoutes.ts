@@ -13,6 +13,7 @@ import {
   getOwnerTenantById,
   getOwnerTenants,
   getOwnerTicketList,
+  markAllOwnerNotificationsRead,
   markOwnerNotificationRead,
   patchOwnerProperty,
   patchOwnerRentPaymentApproval,
@@ -46,6 +47,7 @@ export function createOwnerRouter() {
   router.patch('/tickets/:id', patchOwnerTicket)
 
   router.get('/notifications', getOwnerNotificationList)
+  router.patch('/notifications/read-all', markAllOwnerNotificationsRead)
   router.patch('/notifications/:id/read', markOwnerNotificationRead)
   router.get('/telegram/onboarding', getOwnerTelegramOnboarding)
   router.post('/telegram/disconnect', postOwnerTelegramDisconnect)
