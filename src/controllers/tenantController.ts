@@ -184,7 +184,7 @@ export const getTenantTelegramOnboarding = asyncHandler(async (request: Request,
   })
   const botUsername = getTelegramBotUsername()
   const connectUrl = botUsername
-    ? createTenantTelegramConnectUrl({
+    ? await createTenantTelegramConnectUrl({
         tenantId,
         organizationId,
       })

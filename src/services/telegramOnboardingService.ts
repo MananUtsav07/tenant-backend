@@ -1,5 +1,5 @@
 import type { PostgrestError } from '@supabase/supabase-js'
-import jwt, { type JwtPayload } from 'jsonwebtoken'
+import { randomBytes } from 'node:crypto'
 
 import { env } from '../config/env.js'
 import { AppError } from '../lib/errors.js'
@@ -8,14 +8,6 @@ import { getOwnerById } from './ownerService.js'
 import { getTenantById } from './tenantService.js'
 
 type TelegramUserRole = 'owner' | 'tenant'
-
-type OnboardingTokenPayload = JwtPayload & {
-  purpose: 'telegram_onboarding'
-  role: TelegramUserRole
-  organization_id: string
-  owner_id?: string
-  tenant_id?: string
-}
 
 type TelegramConnectionRow = {
   chat_id: string
@@ -36,6 +28,16 @@ type TelegramConnectionState = {
   } | null
 }
 
+type OnboardingCodeRow = {
+  code: string
+  user_role: TelegramUserRole
+  organization_id: string
+  owner_id: string | null
+  tenant_id: string | null
+  expires_at: string
+  consumed_at: string | null
+}
+
 function throwIfError(error: PostgrestError | null, message: string) {
   if (error) {
     throw new AppError(message, 500, error.message)
@@ -54,62 +56,91 @@ export function getTelegramBotUsername(): string | null {
   return env.TELEGRAM_BOT_USERNAME ?? null
 }
 
-function signOnboardingToken(payload: Omit<OnboardingTokenPayload, keyof JwtPayload>) {
-  return jwt.sign(payload, env.JWT_SECRET, {
-    expiresIn: `${env.TELEGRAM_ONBOARDING_TOKEN_TTL_MINUTES}m`,
-  })
+function buildDeepLink(code: string) {
+  const botUsername = ensureTelegramBotUsername()
+  return `https://t.me/${botUsername}?start=${code}`
 }
 
-function verifyOnboardingToken(token: string): OnboardingTokenPayload {
-  let decoded: string | JwtPayload
-  try {
-    decoded = jwt.verify(token, env.JWT_SECRET)
-  } catch {
+function createOnboardingCode() {
+  // 43-char URL-safe payload, reliable for Telegram start deep links.
+  return `tg_${randomBytes(32).toString('base64url')}`
+}
+
+function expiresAtIso() {
+  return new Date(Date.now() + env.TELEGRAM_ONBOARDING_TOKEN_TTL_MINUTES * 60_000).toISOString()
+}
+
+async function createOnboardingCodeRecord(input: {
+  role: TelegramUserRole
+  organizationId: string
+  ownerId?: string
+  tenantId?: string
+}) {
+  const code = createOnboardingCode()
+  const { error } = await supabaseAdmin.from('telegram_onboarding_codes').insert({
+    code,
+    user_role: input.role,
+    organization_id: input.organizationId,
+    owner_id: input.role === 'owner' ? input.ownerId ?? null : null,
+    tenant_id: input.role === 'tenant' ? input.tenantId ?? null : null,
+    expires_at: expiresAtIso(),
+  })
+  throwIfError(error, 'Failed to create Telegram onboarding code')
+  return code
+}
+
+export async function createOwnerTelegramConnectUrl(input: { ownerId: string; organizationId: string }) {
+  const code = await createOnboardingCodeRecord({
+    role: 'owner',
+    ownerId: input.ownerId,
+    organizationId: input.organizationId,
+  })
+  return buildDeepLink(code)
+}
+
+export async function createTenantTelegramConnectUrl(input: { tenantId: string; organizationId: string }) {
+  const code = await createOnboardingCodeRecord({
+    role: 'tenant',
+    tenantId: input.tenantId,
+    organizationId: input.organizationId,
+  })
+  return buildDeepLink(code)
+}
+
+async function consumeOnboardingCode(code: string): Promise<OnboardingCodeRow> {
+  const { data, error } = await supabaseAdmin
+    .from('telegram_onboarding_codes')
+    .select('code, user_role, organization_id, owner_id, tenant_id, expires_at, consumed_at')
+    .eq('code', code)
+    .maybeSingle()
+
+  throwIfError(error, 'Failed to verify Telegram onboarding code')
+
+  const row = (data as OnboardingCodeRow | null) ?? null
+  if (!row) {
+    throw new AppError('Invalid Telegram onboarding token', 400)
+  }
+
+  if (row.consumed_at) {
+    throw new AppError('Telegram onboarding token already used', 400)
+  }
+
+  const now = new Date()
+  const expiresAt = new Date(row.expires_at)
+  if (Number.isNaN(expiresAt.getTime()) || expiresAt <= now) {
     throw new AppError('Invalid or expired Telegram onboarding token', 400)
   }
 
-  if (typeof decoded === 'string') {
-    throw new AppError('Invalid Telegram onboarding token payload', 400)
-  }
+  const { error: updateError } = await supabaseAdmin
+    .from('telegram_onboarding_codes')
+    .update({
+      consumed_at: now.toISOString(),
+    })
+    .eq('code', code)
+    .is('consumed_at', null)
 
-  if (decoded.purpose !== 'telegram_onboarding') {
-    throw new AppError('Invalid Telegram onboarding token purpose', 400)
-  }
-
-  if (decoded.role !== 'owner' && decoded.role !== 'tenant') {
-    throw new AppError('Invalid Telegram onboarding role', 400)
-  }
-
-  if (typeof decoded.organization_id !== 'string' || decoded.organization_id.length === 0) {
-    throw new AppError('Invalid Telegram onboarding organization context', 400)
-  }
-
-  return decoded as OnboardingTokenPayload
-}
-
-function buildDeepLink(token: string) {
-  const botUsername = ensureTelegramBotUsername()
-  return `https://t.me/${botUsername}?start=${token}`
-}
-
-export function createOwnerTelegramConnectUrl(input: { ownerId: string; organizationId: string }) {
-  const token = signOnboardingToken({
-    purpose: 'telegram_onboarding',
-    role: 'owner',
-    owner_id: input.ownerId,
-    organization_id: input.organizationId,
-  })
-  return buildDeepLink(token)
-}
-
-export function createTenantTelegramConnectUrl(input: { tenantId: string; organizationId: string }) {
-  const token = signOnboardingToken({
-    purpose: 'telegram_onboarding',
-    role: 'tenant',
-    tenant_id: input.tenantId,
-    organization_id: input.organizationId,
-  })
-  return buildDeepLink(token)
+  throwIfError(updateError, 'Failed to consume Telegram onboarding code')
+  return row
 }
 
 async function getConnectionByRole(input: {
@@ -213,15 +244,15 @@ export async function linkTelegramChatFromStartToken(input: {
   firstName: string | null
   lastName: string | null
 }) {
-  const payload = verifyOnboardingToken(input.startToken)
-  const organizationId = payload.organization_id
+  const onboarding = await consumeOnboardingCode(input.startToken)
+  const organizationId = onboarding.organization_id
 
-  if (payload.role === 'owner') {
-    if (typeof payload.owner_id !== 'string' || payload.owner_id.length === 0) {
+  if (onboarding.user_role === 'owner') {
+    if (typeof onboarding.owner_id !== 'string' || onboarding.owner_id.length === 0) {
       throw new AppError('Invalid owner token payload', 400)
     }
 
-    const owner = await getOwnerById(payload.owner_id, organizationId)
+    const owner = await getOwnerById(onboarding.owner_id, organizationId)
     if (!owner) {
       throw new AppError('Owner not found for Telegram onboarding', 404)
     }
@@ -230,7 +261,7 @@ export async function linkTelegramChatFromStartToken(input: {
       {
         organization_id: organizationId,
         user_role: 'owner',
-        owner_id: payload.owner_id,
+        owner_id: onboarding.owner_id,
         tenant_id: null,
         chat_id: input.chatId,
         telegram_user_id: input.telegramUserId,
@@ -247,17 +278,17 @@ export async function linkTelegramChatFromStartToken(input: {
     throwIfError(error, 'Failed to link owner Telegram chat')
     return {
       role: 'owner' as const,
-      owner_id: payload.owner_id,
+      owner_id: onboarding.owner_id,
       tenant_id: null,
       organization_id: organizationId,
     }
   }
 
-  if (typeof payload.tenant_id !== 'string' || payload.tenant_id.length === 0) {
+  if (typeof onboarding.tenant_id !== 'string' || onboarding.tenant_id.length === 0) {
     throw new AppError('Invalid tenant token payload', 400)
   }
 
-  const tenant = await getTenantById(payload.tenant_id, organizationId)
+  const tenant = await getTenantById(onboarding.tenant_id, organizationId)
   if (!tenant) {
     throw new AppError('Tenant not found for Telegram onboarding', 404)
   }
@@ -267,7 +298,7 @@ export async function linkTelegramChatFromStartToken(input: {
       organization_id: organizationId,
       user_role: 'tenant',
       owner_id: null,
-      tenant_id: payload.tenant_id,
+      tenant_id: onboarding.tenant_id,
       chat_id: input.chatId,
       telegram_user_id: input.telegramUserId,
       telegram_username: input.username,
@@ -284,7 +315,7 @@ export async function linkTelegramChatFromStartToken(input: {
   return {
     role: 'tenant' as const,
     owner_id: null,
-    tenant_id: payload.tenant_id,
+    tenant_id: onboarding.tenant_id,
     organization_id: organizationId,
   }
 }

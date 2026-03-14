@@ -423,7 +423,7 @@ export const getOwnerTelegramOnboarding = asyncHandler(async (request: Request, 
   })
   const botUsername = getTelegramBotUsername()
   const connectUrl = botUsername
-    ? createOwnerTelegramConnectUrl({
+    ? await createOwnerTelegramConnectUrl({
         ownerId,
         organizationId,
       })
