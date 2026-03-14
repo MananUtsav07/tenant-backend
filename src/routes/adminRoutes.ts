@@ -16,10 +16,13 @@ import {
   getAdminOwners,
   getAdminProperties,
   getAdminSystemHealth,
+  getAdminTicketById,
   getAdminTenants,
   getAdminTickets,
   loginAdmin,
+  patchAdminTicket,
   postAdminBlogPost,
+  postAdminTicketReply,
   putAdminBlogPost,
 } from '../controllers/adminController.js'
 import { requireAdminAuth } from '../middleware/adminAuth.js'
@@ -39,6 +42,9 @@ export function createAdminRouter() {
   router.get('/tenants', getAdminTenants)
   router.get('/properties', getAdminProperties)
   router.get('/tickets', getAdminTickets)
+  router.get('/tickets/:id', getAdminTicketById)
+  router.post('/tickets/:id/replies', postAdminTicketReply)
+  router.patch('/tickets/:id', patchAdminTicket)
   router.get('/contact-messages', getAdminContactMessages)
   router.get('/analytics', getAdminAnalytics)
   router.get('/ai-status', getAdminAiStatus)

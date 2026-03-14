@@ -31,6 +31,39 @@ type TicketNotificationPayload = {
   message: string
 }
 
+type OwnerTicketReplyNotificationPayload = {
+  to: string
+  ownerName: string
+  tenantName: string
+  tenantAccessId: string
+  propertyName: string | null
+  unitNumber: string | null
+  subject: string
+  message: string
+}
+
+type TenantTicketReplyNotificationPayload = {
+  to: string
+  tenantName: string
+  subject: string
+  senderName: string
+  senderRoleLabel: string
+  propertyName: string | null
+  unitNumber: string | null
+  message: string
+}
+
+type TenantTicketClosedNotificationPayload = {
+  to: string
+  tenantName: string
+  subject: string
+  senderName: string
+  senderRoleLabel: string
+  propertyName: string | null
+  unitNumber: string | null
+  closingMessage?: string | null
+}
+
 type RentPaymentApprovalNotificationPayload = {
   to: string
   ownerName: string
@@ -264,6 +297,29 @@ export async function sendOwnerTicketNotification(payload: TicketNotificationPay
       `Message: ${payload.message}`,
       '',
       'Please log in to your owner dashboard to respond.',
+    ].join('\n'),
+  })
+}
+
+export async function sendOwnerTicketReplyNotification(payload: OwnerTicketReplyNotificationPayload) {
+  const propertyLabel = payload.propertyName?.trim() || 'Not provided'
+  const unitLabel = payload.unitNumber?.trim() || 'Not provided'
+
+  await transporter.sendMail({
+    from: env.EMAIL_FROM,
+    to: payload.to,
+    subject: `New Tenant Reply: ${payload.subject}`,
+    text: [
+      `Hello ${payload.ownerName},`,
+      '',
+      'A tenant replied to an existing support ticket.',
+      `Tenant: ${payload.tenantName} (${payload.tenantAccessId})`,
+      `Property: ${propertyLabel}`,
+      `Unit: ${unitLabel}`,
+      `Subject: ${payload.subject}`,
+      `Reply: ${payload.message}`,
+      '',
+      'Please log in to your owner dashboard to continue the conversation.',
     ].join('\n'),
   })
 }
@@ -505,6 +561,68 @@ export async function sendTenantRentPaymentApprovedEmail(payload: TenantRentPaym
     from: env.EMAIL_FROM,
     to: payload.to,
     subject: 'Your Prophives rent payment was approved',
+    text: content.text,
+    html: content.html,
+  })
+}
+
+export async function sendTenantTicketReplyEmail(payload: TenantTicketReplyNotificationPayload) {
+  const propertyLabel = payload.propertyName?.trim() || 'Not provided'
+  const unitLabel = payload.unitNumber?.trim() || 'Not provided'
+  const content = renderBrandedEmail({
+    eyebrow: 'Support Update',
+    title: 'There is a new reply on your support ticket',
+    intro: [
+      `Hello ${payload.tenantName},`,
+      `${payload.senderName} (${payload.senderRoleLabel}) posted a new reply on your Prophives support ticket.`,
+    ],
+    details: [
+      { label: 'Subject', value: payload.subject },
+      { label: 'Property', value: propertyLabel },
+      { label: 'Unit', value: unitLabel },
+      { label: 'Reply From', value: `${payload.senderName} (${payload.senderRoleLabel})` },
+    ],
+    body: [payload.message],
+    footer: 'Log in to your resident workspace to view the full ticket conversation and respond if needed.',
+  })
+
+  await transporter.sendMail({
+    from: env.EMAIL_FROM,
+    to: payload.to,
+    subject: `Ticket Update: ${payload.subject}`,
+    text: content.text,
+    html: content.html,
+  })
+}
+
+export async function sendTenantTicketClosedEmail(payload: TenantTicketClosedNotificationPayload) {
+  const propertyLabel = payload.propertyName?.trim() || 'Not provided'
+  const unitLabel = payload.unitNumber?.trim() || 'Not provided'
+  const body = payload.closingMessage?.trim()
+    ? [payload.closingMessage.trim()]
+    : ['This ticket has been closed. No additional closing note was included.']
+
+  const content = renderBrandedEmail({
+    eyebrow: 'Ticket Closed',
+    title: 'Your support ticket was closed',
+    intro: [
+      `Hello ${payload.tenantName},`,
+      `${payload.senderName} (${payload.senderRoleLabel}) closed your Prophives support ticket.`,
+    ],
+    details: [
+      { label: 'Subject', value: payload.subject },
+      { label: 'Property', value: propertyLabel },
+      { label: 'Unit', value: unitLabel },
+      { label: 'Closed By', value: `${payload.senderName} (${payload.senderRoleLabel})` },
+    ],
+    body,
+    footer: 'You can log in to your resident workspace to review the full support thread at any time.',
+  })
+
+  await transporter.sendMail({
+    from: env.EMAIL_FROM,
+    to: payload.to,
+    subject: `Ticket Closed: ${payload.subject}`,
     text: content.text,
     html: content.html,
   })

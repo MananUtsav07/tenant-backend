@@ -1,11 +1,14 @@
 import { env } from '../config/env.js'
 import {
   sendOwnerRentPaymentApprovalNotification,
+  sendOwnerTicketReplyNotification,
   sendOwnerTicketNotification,
   sendTenantCredentialNotification,
   sendTenantPasswordChangeRecommendationEmail,
   sendTenantRentPaymentApprovedEmail,
   sendTenantRentPaymentRejectedEmail,
+  sendTenantTicketClosedEmail,
+  sendTenantTicketReplyEmail,
 } from '../lib/mailer.js'
 import { AppError } from '../lib/errors.js'
 import { createOwnerNotification, getOwnerById } from './ownerService.js'
@@ -136,6 +139,69 @@ export async function notifyOwnerTicketCreated(input: {
   }
 }
 
+export async function notifyOwnerTicketReply(input: {
+  organizationId: string
+  ownerId: string
+  tenantId: string
+  tenantName: string
+  tenantAccessId: string
+  propertyName: string | null
+  unitNumber: string | null
+  subject: string
+  message: string
+}) {
+  const owner = await getOwnerById(input.ownerId, input.organizationId)
+  if (!owner) {
+    throw new AppError('Owner not found for ticket reply notification', 404)
+  }
+
+  await createOwnerNotification({
+    organization_id: input.organizationId,
+    owner_id: input.ownerId,
+    tenant_id: input.tenantId,
+    notification_type: 'ticket_reply',
+    title: `New ticket reply from ${input.tenantName}`,
+    message: `${input.subject}: ${input.message}`,
+  })
+
+  const toEmail = listUniqueRecipientEmails(owner).join(', ')
+  try {
+    await sendOwnerTicketReplyNotification({
+      to: toEmail,
+      ownerName: normalizeOwnerName(owner),
+      tenantName: input.tenantName,
+      tenantAccessId: input.tenantAccessId,
+      propertyName: input.propertyName,
+      unitNumber: input.unitNumber,
+      subject: input.subject,
+      message: input.message,
+    })
+  } catch (error) {
+    console.error('[notifyOwnerTicketReply] email failed', error)
+  }
+
+  try {
+    const telegramLink = await getOwnerTelegramChatLink({
+      organizationId: input.organizationId,
+      ownerId: input.ownerId,
+    })
+
+    if (telegramLink) {
+      await sendTelegramMessage({
+        chatId: telegramLink.chat_id,
+        text: [
+          'New tenant reply',
+          `Tenant: ${input.tenantName} (${input.tenantAccessId})`,
+          `Subject: ${input.subject}`,
+          `Reply: ${input.message.length > 500 ? `${input.message.slice(0, 500)}...` : input.message}`,
+        ].join('\n'),
+      })
+    }
+  } catch (error) {
+    console.error('[notifyOwnerTicketReply] telegram failed', error)
+  }
+}
+
 export async function notifyOwnerRentPaymentAwaitingApproval(input: {
   organizationId: string
   ownerId: string
@@ -182,6 +248,90 @@ export async function notifyOwnerRentPaymentAwaitingApproval(input: {
     })
   } catch (error) {
     console.error('[notifyOwnerRentPaymentAwaitingApproval] email failed', error)
+  }
+}
+
+export async function notifyTenantTicketReply(input: {
+  organizationId: string
+  ownerId: string
+  tenantId: string
+  tenantEmail: string | null
+  tenantName: string
+  subject: string
+  senderName: string
+  senderRoleLabel: string
+  propertyName: string | null
+  unitNumber: string | null
+  message: string
+}) {
+  const tenantEmail = input.tenantEmail?.trim().toLowerCase()
+  if (!tenantEmail) {
+    console.warn('[notifyTenantTicketReply] skipped: tenant email missing', {
+      tenantId: input.tenantId,
+      subject: input.subject,
+    })
+    return
+  }
+
+  try {
+    await sendTenantTicketReplyEmail({
+      to: tenantEmail,
+      tenantName: input.tenantName,
+      subject: input.subject,
+      senderName: input.senderName,
+      senderRoleLabel: input.senderRoleLabel,
+      propertyName: input.propertyName,
+      unitNumber: input.unitNumber,
+      message: input.message,
+    })
+  } catch (error) {
+    console.error('[notifyTenantTicketReply] email failed', {
+      tenantId: input.tenantId,
+      subject: input.subject,
+      error,
+    })
+  }
+}
+
+export async function notifyTenantTicketClosed(input: {
+  organizationId: string
+  ownerId: string
+  tenantId: string
+  tenantEmail: string | null
+  tenantName: string
+  subject: string
+  senderName: string
+  senderRoleLabel: string
+  propertyName: string | null
+  unitNumber: string | null
+  closingMessage?: string | null
+}) {
+  const tenantEmail = input.tenantEmail?.trim().toLowerCase()
+  if (!tenantEmail) {
+    console.warn('[notifyTenantTicketClosed] skipped: tenant email missing', {
+      tenantId: input.tenantId,
+      subject: input.subject,
+    })
+    return
+  }
+
+  try {
+    await sendTenantTicketClosedEmail({
+      to: tenantEmail,
+      tenantName: input.tenantName,
+      subject: input.subject,
+      senderName: input.senderName,
+      senderRoleLabel: input.senderRoleLabel,
+      propertyName: input.propertyName,
+      unitNumber: input.unitNumber,
+      closingMessage: input.closingMessage ?? null,
+    })
+  } catch (error) {
+    console.error('[notifyTenantTicketClosed] email failed', {
+      tenantId: input.tenantId,
+      subject: input.subject,
+      error,
+    })
   }
 }
 

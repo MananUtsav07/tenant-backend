@@ -2,8 +2,9 @@ import type { Request, Response } from 'express'
 
 import { AppError, asyncHandler } from '../lib/errors.js'
 import { createAuditLog } from '../services/auditLogService.js'
-import { notifyOwnerTicketCreated } from '../services/notificationService.js'
+import { notifyOwnerTicketCreated, notifyOwnerTicketReply } from '../services/notificationService.js'
 import { getTenantRentPaymentState as loadTenantRentPaymentState, submitTenantRentPayment } from '../services/rentPaymentService.js'
+import { getTenantTicketThread, replyToTicketAsTenant } from '../services/ticketThreadService.js'
 import {
   createTenantTelegramConnectUrl,
   disconnectTenantTelegram,
@@ -14,6 +15,7 @@ import { createTenantTicket, getOwnerContactByTenant, getTenantById, getTenantSu
 import { nextDueDateFromDay } from '../utils/date.js'
 import { tenantMarkRentPaidSchema } from '../validations/rentPaymentSchemas.js'
 import { createTenantTicketSchema } from '../validations/tenantSchemas.js'
+import { createTicketReplySchema } from '../validations/ticketSchemas.js'
 
 function requireTenantIdentity(request: Request) {
   const tenantId = request.tenant?.tenantId
@@ -24,6 +26,15 @@ function requireTenantIdentity(request: Request) {
   }
 
   return { tenantId, ownerId, organizationId }
+}
+
+function readPathId(request: Request, paramName: string): string {
+  const value = request.params[paramName]
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new AppError(`Invalid route parameter: ${paramName}`, 400)
+  }
+
+  return value
 }
 
 export const getTenantDashboardSummary = asyncHandler(async (request: Request, response: Response) => {
@@ -77,6 +88,23 @@ export const getTenantTickets = asyncHandler(async (request: Request, response: 
   const { tenantId, organizationId } = requireTenantIdentity(request)
   const tickets = await listTenantTickets(tenantId, organizationId)
   response.json({ ok: true, tickets })
+})
+
+export const getTenantTicketById = asyncHandler(async (request: Request, response: Response) => {
+  const { tenantId, organizationId } = requireTenantIdentity(request)
+  const ticketId = readPathId(request, 'id')
+
+  const thread = await getTenantTicketThread({
+    ticketId,
+    tenantId,
+    organizationId,
+  })
+
+  if (!thread) {
+    throw new AppError('Ticket not found', 404)
+  }
+
+  response.json({ ok: true, thread })
 })
 
 export const getTenantRentPaymentState = asyncHandler(async (request: Request, response: Response) => {
@@ -168,6 +196,52 @@ export const postTenantTicket = asyncHandler(async (request: Request, response: 
   })
 
   response.status(201).json({ ok: true, ticket })
+})
+
+export const postTenantTicketReply = asyncHandler(async (request: Request, response: Response) => {
+  const { tenantId, ownerId, organizationId } = requireTenantIdentity(request)
+  const ticketId = readPathId(request, 'id')
+
+  const parsed = createTicketReplySchema.parse(request.body)
+
+  const tenant = await getTenantById(tenantId, organizationId)
+  if (!tenant) {
+    throw new AppError('Tenant not found', 404)
+  }
+
+  const result = await replyToTicketAsTenant({
+    ticketId,
+    tenantId,
+    organizationId,
+    message: parsed.message,
+  })
+
+  await notifyOwnerTicketReply({
+    organizationId,
+    ownerId,
+    tenantId,
+    tenantName: tenant.full_name,
+    tenantAccessId: tenant.tenant_access_id,
+    propertyName: tenant.properties?.property_name ?? null,
+    unitNumber: tenant.properties?.unit_number ?? null,
+    subject: result.ticket.subject,
+    message: parsed.message,
+  })
+
+  await createAuditLog({
+    organization_id: organizationId,
+    actor_id: tenantId,
+    actor_role: 'tenant',
+    action: 'ticket.reply_posted',
+    entity_type: 'support_ticket_message',
+    entity_id: result.message.id,
+    metadata: {
+      ticket_id: result.ticket.id,
+      message_type: result.message.message_type,
+    },
+  })
+
+  response.status(201).json({ ok: true, message: result.message })
 })
 
 export const getTenantOwnerContact = asyncHandler(async (request: Request, response: Response) => {

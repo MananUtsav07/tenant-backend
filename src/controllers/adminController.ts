@@ -3,6 +3,7 @@ import type { Request, Response } from 'express'
 
 import { AppError, asyncHandler } from '../lib/errors.js'
 import { signAdminToken } from '../lib/jwt.js'
+import { createAuditLog } from '../services/auditLogService.js'
 import { getAdminAiStatusSummary } from '../services/ai/aiConfigService.js'
 import { getAutomationHealth, listAutomationErrors, listAutomationRuns } from '../services/automationEngineService.js'
 import {
@@ -21,6 +22,8 @@ import {
 } from '../services/adminService.js'
 import { createAnalyticsEvent } from '../services/analyticsService.js'
 import { createBlogPost, deleteBlogPost, listBlogPosts, updateBlogPost } from '../services/blogService.js'
+import { notifyTenantTicketClosed, notifyTenantTicketReply } from '../services/notificationService.js'
+import { getAdminTicketThread, replyToTicketAsAdmin, updateTicketStatusAsAdmin } from '../services/ticketThreadService.js'
 import {
   adminAnalyticsListQuerySchema,
   adminContactMessageListQuerySchema,
@@ -33,6 +36,7 @@ import {
 } from '../validations/adminSchemas.js'
 import { adminBlogListQuerySchema, createBlogPostSchema, updateBlogPostSchema } from '../validations/blogSchemas.js'
 import { adminAutomationErrorsQuerySchema, adminAutomationRunsQuerySchema } from '../validations/automationSchemas.js'
+import { createTicketReplySchema, updateSupportTicketStatusSchema } from '../validations/ticketSchemas.js'
 
 function requireAdminId(request: Request): string {
   const adminId = request.admin?.adminId
@@ -185,6 +189,125 @@ export const getAdminTickets = asyncHandler(async (request: Request, response: R
     },
     search: parsed.search ?? '',
   })
+})
+
+export const getAdminTicketById = asyncHandler(async (request: Request, response: Response) => {
+  const ticketId = readPathId(request, 'id')
+  const thread = await getAdminTicketThread({ ticketId })
+  if (!thread) {
+    throw new AppError('Ticket not found', 404)
+  }
+
+  response.json({ ok: true, thread })
+})
+
+export const postAdminTicketReply = asyncHandler(async (request: Request, response: Response) => {
+  const adminId = requireAdminId(request)
+  const ticketId = readPathId(request, 'id')
+  const parsed = createTicketReplySchema.parse(request.body)
+
+  const result = await replyToTicketAsAdmin({
+    ticketId,
+    adminId,
+    message: parsed.message,
+  })
+
+  const tenant = result.ticket.tenants as
+    | {
+        id: string
+        full_name: string
+        email?: string | null
+        properties?: { property_name?: string | null; unit_number?: string | null } | null
+      }
+    | null
+  const admin = await getAdminById(adminId)
+
+  await notifyTenantTicketReply({
+    organizationId: result.ticket.organization_id,
+    ownerId: result.ticket.owner_id,
+    tenantId: result.ticket.tenant_id,
+    tenantEmail: tenant?.email ?? null,
+    tenantName: tenant?.full_name ?? 'Tenant',
+    subject: result.ticket.subject,
+    senderName: admin?.full_name ?? admin?.email ?? 'Prophives Operations',
+    senderRoleLabel: 'Admin',
+    propertyName: tenant?.properties?.property_name ?? null,
+    unitNumber: tenant?.properties?.unit_number ?? null,
+    message: parsed.message,
+  })
+
+  await createAuditLog({
+    organization_id: result.ticket.organization_id,
+    actor_id: adminId,
+    actor_role: 'admin',
+    action: 'ticket.reply_posted',
+    entity_type: 'support_ticket_message',
+    entity_id: result.message.id,
+    metadata: {
+      ticket_id: result.ticket.id,
+      message_type: result.message.message_type,
+    },
+  })
+
+  response.status(201).json({ ok: true, message: result.message })
+})
+
+export const patchAdminTicket = asyncHandler(async (request: Request, response: Response) => {
+  const adminId = requireAdminId(request)
+  const ticketId = readPathId(request, 'id')
+  const parsed = updateSupportTicketStatusSchema.parse(request.body)
+
+  const ticket = await updateTicketStatusAsAdmin({
+    ticketId,
+    adminId,
+    status: parsed.status,
+    closingMessage: parsed.closing_message,
+  })
+
+  if (!ticket) {
+    throw new AppError('Ticket not found', 404)
+  }
+
+  const tenant = ticket.tenants as
+    | {
+        id: string
+        full_name: string
+        email?: string | null
+        properties?: { property_name?: string | null; unit_number?: string | null } | null
+      }
+    | null
+  const admin = await getAdminById(adminId)
+
+  if (parsed.status === 'closed') {
+    await notifyTenantTicketClosed({
+      organizationId: ticket.organization_id,
+      ownerId: ticket.owner_id,
+      tenantId: ticket.tenant_id,
+      tenantEmail: tenant?.email ?? null,
+      tenantName: tenant?.full_name ?? 'Tenant',
+      subject: ticket.subject,
+      senderName: admin?.full_name ?? admin?.email ?? 'Prophives Operations',
+      senderRoleLabel: 'Admin',
+      propertyName: tenant?.properties?.property_name ?? null,
+      unitNumber: tenant?.properties?.unit_number ?? null,
+      closingMessage: parsed.closing_message ?? null,
+    })
+  }
+
+  await createAuditLog({
+    organization_id: ticket.organization_id,
+    actor_id: adminId,
+    actor_role: 'admin',
+    action: 'ticket.status_updated',
+    entity_type: 'support_ticket',
+    entity_id: ticket.id,
+    metadata: {
+      status: parsed.status,
+      closing_message_present: Boolean(parsed.closing_message),
+    },
+  })
+
+  response.json({ ok: true, ticket })
 })
 
 export const getAdminContactMessages = asyncHandler(async (request: Request, response: Response) => {

@@ -4,7 +4,7 @@ import type { Request, Response } from 'express'
 import { AppError, asyncHandler } from '../lib/errors.js'
 import { requireOrganizationContext } from '../middleware/organizationContext.js'
 import { createAuditLog } from '../services/auditLogService.js'
-import { notifyTenantAccountProvisioned } from '../services/notificationService.js'
+import { notifyTenantAccountProvisioned, notifyTenantTicketClosed, notifyTenantTicketReply } from '../services/notificationService.js'
 import { getOwnerAutomationSettings, listOwnerAutomationActivity, updateOwnerAutomationSettings } from '../services/ownerAutomationService.js'
 import {
   createProperty,
@@ -21,21 +21,22 @@ import {
   listTenants,
   markAllNotificationsRead,
   markNotificationRead,
-  updateOwnerTicket,
   updateProperty,
   updateTenant,
 } from '../services/ownerService.js'
 import { processOwnerReminders } from '../services/reminderService.js'
 import { listOwnerAwaitingRentPaymentApprovals, reviewOwnerRentPaymentApproval } from '../services/rentPaymentService.js'
+import { getOwnerTicketThread, replyToTicketAsOwner, updateTicketStatusAsOwner } from '../services/ticketThreadService.js'
 import {
   createOwnerTelegramConnectUrl,
   disconnectOwnerTelegram,
   getOwnerTelegramConnectionState,
   getTelegramBotUsername,
 } from '../services/telegramOnboardingService.js'
-import { createTenantSchema, createPropertySchema, updatePropertySchema, updateTenantSchema, updateTicketStatusSchema } from '../validations/ownerSchemas.js'
+import { createTenantSchema, createPropertySchema, updatePropertySchema, updateTenantSchema } from '../validations/ownerSchemas.js'
 import { ownerReviewRentPaymentSchema } from '../validations/rentPaymentSchemas.js'
 import { ownerAutomationActivityQuerySchema, ownerAutomationSettingsUpdateSchema } from '../validations/automationSchemas.js'
+import { createTicketReplySchema, updateSupportTicketStatusSchema } from '../validations/ticketSchemas.js'
 
 function requireOwnerContext(request: Request): { ownerId: string; organizationId: string } {
   const ownerId = request.owner?.ownerId
@@ -273,14 +274,131 @@ export const getOwnerTicketList = asyncHandler(async (request: Request, response
   response.json({ ok: true, tickets })
 })
 
+export const getOwnerTicketById = asyncHandler(async (request: Request, response: Response) => {
+  const { organizationId } = requireOwnerContext(request)
+  const ticketId = readPathId(request, 'id')
+  const thread = await getOwnerTicketThread({
+    ticketId,
+    organizationId,
+  })
+
+  if (!thread) {
+    throw new AppError('Ticket not found in your organization', 404)
+  }
+
+  response.json({ ok: true, thread })
+})
+
+export const postOwnerTicketReply = asyncHandler(async (request: Request, response: Response) => {
+  const { ownerId, organizationId } = requireOwnerContext(request)
+  const ticketId = readPathId(request, 'id')
+  const parsed = createTicketReplySchema.parse(request.body)
+
+  const result = await replyToTicketAsOwner({
+    ticketId,
+    ownerId,
+    organizationId,
+    message: parsed.message,
+  })
+
+  const tenant = result.ticket.tenants as
+    | {
+        id: string
+        full_name: string
+        tenant_access_id: string
+        email?: string | null
+        properties?: { property_name?: string | null; unit_number?: string | null } | null
+      }
+    | null
+  const ownerContact = result.ticket.owners as
+    | {
+        full_name?: string | null
+        company_name?: string | null
+        email?: string | null
+      }
+    | null
+  const senderName =
+    ownerContact?.full_name?.trim() || ownerContact?.company_name?.trim() || ownerContact?.email?.trim() || 'Property Team'
+
+  await notifyTenantTicketReply({
+    organizationId,
+    ownerId,
+    tenantId: result.ticket.tenant_id,
+    tenantEmail: tenant?.email ?? null,
+    tenantName: tenant?.full_name ?? 'Tenant',
+    subject: result.ticket.subject,
+    senderName,
+    senderRoleLabel: 'Owner',
+    propertyName: tenant?.properties?.property_name ?? null,
+    unitNumber: tenant?.properties?.unit_number ?? null,
+    message: parsed.message,
+  })
+
+  await createAuditLog({
+    organization_id: organizationId,
+    actor_id: ownerId,
+    actor_role: 'owner',
+    action: 'ticket.reply_posted',
+    entity_type: 'support_ticket_message',
+    entity_id: result.message.id,
+    metadata: {
+      ticket_id: result.ticket.id,
+      message_type: result.message.message_type,
+    },
+  })
+
+  response.status(201).json({ ok: true, message: result.message })
+})
+
 export const patchOwnerTicket = asyncHandler(async (request: Request, response: Response) => {
   const { ownerId, organizationId } = requireOwnerContext(request)
   const ticketId = readPathId(request, 'id')
-  const parsed = updateTicketStatusSchema.parse(request.body)
+  const parsed = updateSupportTicketStatusSchema.parse(request.body)
 
-  const ticket = await updateOwnerTicket(organizationId, ticketId, parsed.status)
+  const ticket = await updateTicketStatusAsOwner({
+    organizationId,
+    ownerId,
+    ticketId,
+    status: parsed.status,
+    closingMessage: parsed.closing_message,
+  })
   if (!ticket) {
     throw new AppError('Ticket not found in your organization', 404)
+  }
+
+  const tenant = ticket.tenants as
+    | {
+        id: string
+        full_name: string
+        tenant_access_id: string
+        email?: string | null
+        properties?: { property_name?: string | null; unit_number?: string | null } | null
+      }
+    | null
+  const ownerContact = ticket.owners as
+    | {
+        full_name?: string | null
+        company_name?: string | null
+        email?: string | null
+      }
+    | null
+  const senderName =
+    ownerContact?.full_name?.trim() || ownerContact?.company_name?.trim() || ownerContact?.email?.trim() || 'Property Team'
+
+  if (parsed.status === 'closed') {
+    await notifyTenantTicketClosed({
+      organizationId,
+      ownerId,
+      tenantId: ticket.tenant_id,
+      tenantEmail: tenant?.email ?? null,
+      tenantName: tenant?.full_name ?? 'Tenant',
+      subject: ticket.subject,
+      senderName,
+      senderRoleLabel: 'Owner',
+      propertyName: tenant?.properties?.property_name ?? null,
+      unitNumber: tenant?.properties?.unit_number ?? null,
+      closingMessage: parsed.closing_message ?? null,
+    })
   }
 
   await createAuditLog({
@@ -290,7 +408,10 @@ export const patchOwnerTicket = asyncHandler(async (request: Request, response: 
     action: 'ticket.status_updated',
     entity_type: 'support_ticket',
     entity_id: ticket.id,
-    metadata: { status: parsed.status },
+    metadata: {
+      status: parsed.status,
+      closing_message_present: Boolean(parsed.closing_message),
+    },
   })
 
   response.json({ ok: true, ticket })
