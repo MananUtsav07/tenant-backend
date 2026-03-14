@@ -4,6 +4,12 @@ import { AppError, asyncHandler } from '../lib/errors.js'
 import { createAuditLog } from '../services/auditLogService.js'
 import { notifyOwnerTicketCreated } from '../services/notificationService.js'
 import { getTenantRentPaymentState as loadTenantRentPaymentState, submitTenantRentPayment } from '../services/rentPaymentService.js'
+import {
+  createTenantTelegramConnectUrl,
+  disconnectTenantTelegram,
+  getTelegramBotUsername,
+  getTenantTelegramConnectionState,
+} from '../services/telegramOnboardingService.js'
 import { createTenantTicket, getOwnerContactByTenant, getTenantById, getTenantSummary, listTenantTickets } from '../services/tenantService.js'
 import { nextDueDateFromDay } from '../utils/date.js'
 import { tenantMarkRentPaidSchema } from '../validations/rentPaymentSchemas.js'
@@ -168,4 +174,51 @@ export const getTenantOwnerContact = asyncHandler(async (request: Request, respo
   const { tenantId, organizationId } = requireTenantIdentity(request)
   const ownerContact = await getOwnerContactByTenant(tenantId, organizationId)
   response.json({ ok: true, owner: ownerContact })
+})
+
+export const getTenantTelegramOnboarding = asyncHandler(async (request: Request, response: Response) => {
+  const { tenantId, organizationId } = requireTenantIdentity(request)
+  const state = await getTenantTelegramConnectionState({
+    tenantId,
+    organizationId,
+  })
+  const botUsername = getTelegramBotUsername()
+  const connectUrl = botUsername
+    ? createTenantTelegramConnectUrl({
+        tenantId,
+        organizationId,
+      })
+    : null
+
+  response.json({
+    ok: true,
+    onboarding: {
+      connected: state.connected,
+      bot_username: botUsername,
+      connect_url: connectUrl,
+      linked_chat: state.linked_chat,
+    },
+  })
+})
+
+export const postTenantTelegramDisconnect = asyncHandler(async (request: Request, response: Response) => {
+  const { tenantId, organizationId } = requireTenantIdentity(request)
+  const disconnected = await disconnectTenantTelegram({
+    tenantId,
+    organizationId,
+  })
+
+  await createAuditLog({
+    organization_id: organizationId,
+    actor_id: tenantId,
+    actor_role: 'tenant',
+    action: 'telegram.disconnected',
+    entity_type: 'telegram_chat_link',
+    metadata: { disconnected },
+  })
+
+  response.json({
+    ok: true,
+    disconnected,
+  })
 })

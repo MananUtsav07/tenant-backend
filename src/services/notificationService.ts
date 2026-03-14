@@ -1,6 +1,7 @@
 import { sendOwnerRentPaymentApprovalNotification, sendOwnerTicketNotification } from '../lib/mailer.js'
 import { AppError } from '../lib/errors.js'
 import { createOwnerNotification, getOwnerById } from './ownerService.js'
+import { getOwnerTelegramChatLink, sendTelegramMessage } from './telegramService.js'
 
 function normalizeOwnerName(owner: { full_name?: string | null; company_name?: string | null; email: string }) {
   return owner.full_name || owner.company_name || owner.email
@@ -27,6 +28,28 @@ function formatCurrencyLabel(amount: number, currencyCode: string): string {
       maximumFractionDigits: 0,
     }).format(amount)
   }
+}
+
+function formatTicketTelegramMessage(input: {
+  tenantName: string
+  tenantAccessId: string
+  propertyName: string | null
+  unitNumber: string | null
+  subject: string
+  message: string
+}) {
+  const propertyLabel = input.propertyName
+    ? `${input.propertyName}${input.unitNumber ? ` (${input.unitNumber})` : ''}`
+    : '-'
+  const messagePreview = input.message.length > 500 ? `${input.message.slice(0, 500)}...` : input.message
+
+  return [
+    'New support ticket',
+    `Tenant: ${input.tenantName} (${input.tenantAccessId})`,
+    `Property: ${propertyLabel}`,
+    `Subject: ${input.subject}`,
+    `Message: ${messagePreview}`,
+  ].join('\n')
 }
 
 export async function notifyOwnerTicketCreated(input: {
@@ -68,6 +91,29 @@ export async function notifyOwnerTicketCreated(input: {
     })
   } catch (error) {
     console.error('[notifyOwnerTicketCreated] email failed', error)
+  }
+
+  try {
+    const telegramLink = await getOwnerTelegramChatLink({
+      organizationId: input.organizationId,
+      ownerId: input.ownerId,
+    })
+
+    if (telegramLink) {
+      await sendTelegramMessage({
+        chatId: telegramLink.chat_id,
+        text: formatTicketTelegramMessage({
+          tenantName: input.tenantName,
+          tenantAccessId: input.tenantAccessId,
+          propertyName: input.propertyName,
+          unitNumber: input.unitNumber,
+          subject: input.subject,
+          message: input.message,
+        }),
+      })
+    }
+  } catch (error) {
+    console.error('[notifyOwnerTicketCreated] telegram failed', error)
   }
 }
 

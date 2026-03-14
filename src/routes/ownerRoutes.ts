@@ -7,6 +7,7 @@ import {
   getOwnerRentPaymentApprovals,
   getOwnerProperties,
   getOwnerSummary,
+  getOwnerTelegramOnboarding,
   getOwnerTenantById,
   getOwnerTenants,
   getOwnerTicketList,
@@ -15,6 +16,7 @@ import {
   patchOwnerRentPaymentApproval,
   patchOwnerTenant,
   patchOwnerTicket,
+  postOwnerTelegramDisconnect,
   processReminders,
   removeOwnerProperty,
   removeOwnerTenant,
@@ -42,6 +44,8 @@ export function createOwnerRouter() {
 
   router.get('/notifications', getOwnerNotificationList)
   router.patch('/notifications/:id/read', markOwnerNotificationRead)
+  router.get('/telegram/onboarding', getOwnerTelegramOnboarding)
+  router.post('/telegram/disconnect', postOwnerTelegramDisconnect)
 
   router.get('/dashboard-summary', getOwnerSummary)
   router.get('/rent-payment-approvals', getOwnerRentPaymentApprovals)

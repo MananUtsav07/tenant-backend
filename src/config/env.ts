@@ -24,6 +24,10 @@ const envSchema = z.object({
   EMAIL_USER: z.string().email(),
   EMAIL_PASS: z.string().min(3),
   OPENAI_API_KEY: optionalNonEmptyString,
+  TELEGRAM_BOT_TOKEN: optionalNonEmptyString,
+  TELEGRAM_BOT_USERNAME: optionalNonEmptyString,
+  TELEGRAM_WEBHOOK_SECRET: optionalNonEmptyString,
+  TELEGRAM_ONBOARDING_TOKEN_TTL_MINUTES: z.coerce.number().int().min(5).max(120).default(30),
   FRONTEND_URL: z.string().url(),
   ALLOWED_ORIGINS: z.string().optional(),
 })

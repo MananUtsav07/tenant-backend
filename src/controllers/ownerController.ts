@@ -23,6 +23,12 @@ import {
 } from '../services/ownerService.js'
 import { processOwnerReminders } from '../services/reminderService.js'
 import { listOwnerAwaitingRentPaymentApprovals, reviewOwnerRentPaymentApproval } from '../services/rentPaymentService.js'
+import {
+  createOwnerTelegramConnectUrl,
+  disconnectOwnerTelegram,
+  getOwnerTelegramConnectionState,
+  getTelegramBotUsername,
+} from '../services/telegramOnboardingService.js'
 import { createTenantSchema, createPropertySchema, updatePropertySchema, updateTenantSchema, updateTicketStatusSchema } from '../validations/ownerSchemas.js'
 import { ownerReviewRentPaymentSchema } from '../validations/rentPaymentSchemas.js'
 
@@ -366,4 +372,51 @@ export const processReminders = asyncHandler(async (request: Request, response: 
   })
 
   response.json({ ok: true, result })
+})
+
+export const getOwnerTelegramOnboarding = asyncHandler(async (request: Request, response: Response) => {
+  const { ownerId, organizationId } = requireOwnerContext(request)
+  const state = await getOwnerTelegramConnectionState({
+    ownerId,
+    organizationId,
+  })
+  const botUsername = getTelegramBotUsername()
+  const connectUrl = botUsername
+    ? createOwnerTelegramConnectUrl({
+        ownerId,
+        organizationId,
+      })
+    : null
+
+  response.json({
+    ok: true,
+    onboarding: {
+      connected: state.connected,
+      bot_username: botUsername,
+      connect_url: connectUrl,
+      linked_chat: state.linked_chat,
+    },
+  })
+})
+
+export const postOwnerTelegramDisconnect = asyncHandler(async (request: Request, response: Response) => {
+  const { ownerId, organizationId } = requireOwnerContext(request)
+  const disconnected = await disconnectOwnerTelegram({
+    ownerId,
+    organizationId,
+  })
+
+  await createAuditLog({
+    organization_id: organizationId,
+    actor_id: ownerId,
+    actor_role: 'owner',
+    action: 'telegram.disconnected',
+    entity_type: 'telegram_chat_link',
+    metadata: { disconnected },
+  })
+
+  response.json({
+    ok: true,
+    disconnected,
+  })
 })

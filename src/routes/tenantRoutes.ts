@@ -5,8 +5,10 @@ import {
   getTenantOwnerContact,
   getTenantProperty,
   getTenantRentPaymentState,
+  getTenantTelegramOnboarding,
   getTenantTickets,
   postTenantRentPaymentMarkPaid,
+  postTenantTelegramDisconnect,
   postTenantTicket,
 } from '../controllers/tenantController.js'
 import { requireTenantAuth } from '../middleware/tenantAuth.js'
@@ -23,6 +25,8 @@ export function createTenantRouter() {
   router.get('/rent-payment-state', getTenantRentPaymentState)
   router.post('/rent-payment-mark-paid', postTenantRentPaymentMarkPaid)
   router.get('/owner-contact', getTenantOwnerContact)
+  router.get('/telegram/onboarding', getTenantTelegramOnboarding)
+  router.post('/telegram/disconnect', postTenantTelegramDisconnect)
 
   return router
 }
