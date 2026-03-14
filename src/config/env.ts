@@ -15,6 +15,30 @@ const optionalNonEmptyString = z.preprocess(
   z.string().min(1).optional(),
 )
 
+const optionalBoolean = z.preprocess(
+  (value) => {
+    if (typeof value === 'boolean') {
+      return value
+    }
+
+    if (typeof value !== 'string') {
+      return value
+    }
+
+    const normalized = value.trim().toLowerCase()
+    if (normalized === 'true') {
+      return true
+    }
+
+    if (normalized === 'false') {
+      return false
+    }
+
+    return value
+  },
+  z.boolean().optional(),
+)
+
 const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(8787),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
@@ -23,6 +47,10 @@ const envSchema = z.object({
   JWT_SECRET: z.string().min(20),
   EMAIL_USER: z.string().email(),
   EMAIL_PASS: z.string().min(3),
+  EMAIL_FROM: optionalNonEmptyString,
+  SMTP_HOST: optionalNonEmptyString,
+  SMTP_PORT: z.coerce.number().int().positive().default(465),
+  SMTP_SECURE: optionalBoolean.default(true),
   OPENAI_API_KEY: optionalNonEmptyString,
   TELEGRAM_BOT_TOKEN: optionalNonEmptyString,
   TELEGRAM_BOT_USERNAME: optionalNonEmptyString,
@@ -47,6 +75,7 @@ const rawOrigins = parsed.data.ALLOWED_ORIGINS
 
 export const env = {
   ...parsed.data,
+  EMAIL_FROM: parsed.data.EMAIL_FROM ?? parsed.data.EMAIL_USER,
   ALLOWED_ORIGIN_LIST: Array.from(new Set(rawOrigins)),
 }
 

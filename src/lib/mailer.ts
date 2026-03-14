@@ -2,13 +2,23 @@ import nodemailer from 'nodemailer'
 
 import { env } from '../config/env.js'
 
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: env.EMAIL_USER,
-    pass: env.EMAIL_PASS,
-  },
-})
+const transporter = env.SMTP_HOST
+  ? nodemailer.createTransport({
+      host: env.SMTP_HOST,
+      port: env.SMTP_PORT,
+      secure: env.SMTP_SECURE,
+      auth: {
+        user: env.EMAIL_USER,
+        pass: env.EMAIL_PASS,
+      },
+    })
+  : nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: env.EMAIL_USER,
+        pass: env.EMAIL_PASS,
+      },
+    })
 
 type TicketNotificationPayload = {
   to: string
@@ -72,7 +82,7 @@ export async function sendOwnerTicketNotification(payload: TicketNotificationPay
   const unitLabel = payload.unitNumber?.trim() || 'Not provided'
 
   await transporter.sendMail({
-    from: env.EMAIL_USER,
+    from: env.EMAIL_FROM,
     to: payload.to,
     subject: `Tenant Ticket: ${payload.subject}`,
     text: [
@@ -95,7 +105,7 @@ export async function sendOwnerRentPaymentApprovalNotification(payload: RentPaym
   const unitLabel = payload.unitNumber?.trim() || 'Not provided'
 
   await transporter.sendMail({
-    from: env.EMAIL_USER,
+    from: env.EMAIL_FROM,
     to: payload.to,
     subject: `Rent Payment Awaiting Approval: ${payload.tenantName}`,
     text: [
@@ -115,7 +125,7 @@ export async function sendOwnerRentPaymentApprovalNotification(payload: RentPaym
 
 export async function sendPublicContactNotification(payload: PublicContactNotificationPayload) {
   await transporter.sendMail({
-    from: env.EMAIL_USER,
+    from: env.EMAIL_FROM,
     to: payload.to,
     subject: `New public contact message from ${payload.name}`,
     text: [
@@ -138,7 +148,7 @@ export async function sendOwnerComplianceAlertNotification(payload: OwnerComplia
   const tenantAccessLabel = payload.tenantAccessId?.trim() || 'Not provided'
 
   await transporter.sendMail({
-    from: env.EMAIL_USER,
+    from: env.EMAIL_FROM,
     to: payload.to,
     subject: `Compliance Alert: Action required in ${payload.daysRemaining} days`,
     text: [
@@ -159,7 +169,7 @@ export async function sendOwnerComplianceAlertNotification(payload: OwnerComplia
 
 export async function sendOwnerPortfolioSummaryNotification(payload: OwnerPortfolioSummaryNotificationPayload) {
   await transporter.sendMail({
-    from: env.EMAIL_USER,
+    from: env.EMAIL_FROM,
     to: payload.to,
     subject: 'Daily Portfolio Brief',
     text: [
