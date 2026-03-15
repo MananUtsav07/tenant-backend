@@ -21,6 +21,7 @@ import {
   getAdminTickets,
   loginAdmin,
   patchAdminTicket,
+  postAdminTelegramMaintenanceCleanup,
   postAdminBlogPost,
   postAdminTicketReply,
   putAdminBlogPost,
@@ -51,6 +52,7 @@ export function createAdminRouter() {
   router.get('/automations/health', getAdminAutomationHealth)
   router.get('/automations/runs', getAdminAutomationRuns)
   router.get('/automations/errors', getAdminAutomationErrors)
+  router.post('/telegram/maintenance-cleanup', postAdminTelegramMaintenanceCleanup)
   router.get('/system-health', getAdminSystemHealth)
 
   router.get('/blog', getAdminBlogPosts)

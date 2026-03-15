@@ -11,8 +11,9 @@ import {
   sendTenantTicketReplyEmail,
 } from '../lib/mailer.js'
 import { AppError } from '../lib/errors.js'
+import { getOwnerNotificationPreferences } from './ownerNotificationPreferenceService.js'
 import { createOwnerNotification, getOwnerById } from './ownerService.js'
-import { getOwnerTelegramChatLink, sendTelegramMessage } from './telegramService.js'
+import { getOwnerTelegramChatLink, getTenantTelegramChatLink, sendTelegramMessageWithRetry } from './telegramService.js'
 
 function normalizeOwnerName(owner: { full_name?: string | null; company_name?: string | null; email: string }) {
   return owner.full_name || owner.company_name || owner.email
@@ -53,6 +54,7 @@ function buildFrontendUrl(path: string): string {
 }
 
 function formatTicketTelegramMessage(input: {
+  ticketId: string
   tenantName: string
   tenantAccessId: string
   propertyName: string | null
@@ -67,6 +69,7 @@ function formatTicketTelegramMessage(input: {
 
   return [
     'New support ticket',
+    `Ticket: #${input.ticketId.slice(0, 8)}`,
     `Tenant: ${input.tenantName} (${input.tenantAccessId})`,
     `Property: ${propertyLabel}`,
     `Subject: ${input.subject}`,
@@ -75,6 +78,7 @@ function formatTicketTelegramMessage(input: {
 }
 
 export async function notifyOwnerTicketCreated(input: {
+  ticketId: string
   organizationId: string
   ownerId: string
   tenantId: string
@@ -89,6 +93,7 @@ export async function notifyOwnerTicketCreated(input: {
   if (!owner) {
     throw new AppError('Owner not found for ticket notification', 404)
   }
+  const preferences = await getOwnerNotificationPreferences(input.ownerId, input.organizationId)
 
   await createOwnerNotification({
     organization_id: input.organizationId,
@@ -99,47 +104,72 @@ export async function notifyOwnerTicketCreated(input: {
     message: `${input.subject}: ${input.message}`,
   })
 
-  const toEmail = listUniqueRecipientEmails(owner).join(', ')
-  try {
-    await sendOwnerTicketNotification({
-      to: toEmail,
-      ownerName: normalizeOwnerName(owner),
-      tenantName: input.tenantName,
-      tenantAccessId: input.tenantAccessId,
-      propertyName: input.propertyName,
-      unitNumber: input.unitNumber,
-      subject: input.subject,
-      message: input.message,
-    })
-  } catch (error) {
-    console.error('[notifyOwnerTicketCreated] email failed', error)
+  if (preferences.ticket_created_email) {
+    const toEmail = listUniqueRecipientEmails(owner).join(', ')
+    try {
+      await sendOwnerTicketNotification({
+        to: toEmail,
+        ownerName: normalizeOwnerName(owner),
+        tenantName: input.tenantName,
+        tenantAccessId: input.tenantAccessId,
+        propertyName: input.propertyName,
+        unitNumber: input.unitNumber,
+        subject: input.subject,
+        message: input.message,
+      })
+    } catch (error) {
+      console.error('[notifyOwnerTicketCreated] email failed', error)
+    }
   }
 
-  try {
-    const telegramLink = await getOwnerTelegramChatLink({
-      organizationId: input.organizationId,
-      ownerId: input.ownerId,
-    })
-
-    if (telegramLink) {
-      await sendTelegramMessage({
-        chatId: telegramLink.chat_id,
-        text: formatTicketTelegramMessage({
-          tenantName: input.tenantName,
-          tenantAccessId: input.tenantAccessId,
-          propertyName: input.propertyName,
-          unitNumber: input.unitNumber,
-          subject: input.subject,
-          message: input.message,
-        }),
+  if (preferences.ticket_created_telegram) {
+    try {
+      const telegramLink = await getOwnerTelegramChatLink({
+        organizationId: input.organizationId,
+        ownerId: input.ownerId,
       })
+
+      if (telegramLink) {
+        await sendTelegramMessageWithRetry({
+          chatId: telegramLink.chat_id,
+          text: formatTicketTelegramMessage({
+            ticketId: input.ticketId,
+            tenantName: input.tenantName,
+            tenantAccessId: input.tenantAccessId,
+            propertyName: input.propertyName,
+            unitNumber: input.unitNumber,
+            subject: input.subject,
+            message: input.message,
+          }),
+          replyMarkup: {
+            inline_keyboard: [
+              [
+                { text: 'Mark In Progress', callback_data: `ts|${input.ticketId}|in_progress` },
+                { text: 'Mark Resolved', callback_data: `ts|${input.ticketId}|resolved` },
+              ],
+              [{ text: 'Mark Closed', callback_data: `ts|${input.ticketId}|closed` }],
+            ],
+          },
+          logContext: {
+            organizationId: input.organizationId,
+            ownerId: input.ownerId,
+            tenantId: input.tenantId,
+            userRole: 'owner',
+            eventType: 'ticket_created',
+            metadata: {
+              ticket_id: input.ticketId,
+            },
+          },
+        })
+      }
+    } catch (error) {
+      console.error('[notifyOwnerTicketCreated] telegram failed', error)
     }
-  } catch (error) {
-    console.error('[notifyOwnerTicketCreated] telegram failed', error)
   }
 }
 
 export async function notifyOwnerTicketReply(input: {
+  ticketId: string
   organizationId: string
   ownerId: string
   tenantId: string
@@ -154,6 +184,7 @@ export async function notifyOwnerTicketReply(input: {
   if (!owner) {
     throw new AppError('Owner not found for ticket reply notification', 404)
   }
+  const preferences = await getOwnerNotificationPreferences(input.ownerId, input.organizationId)
 
   await createOwnerNotification({
     organization_id: input.organizationId,
@@ -164,41 +195,56 @@ export async function notifyOwnerTicketReply(input: {
     message: `${input.subject}: ${input.message}`,
   })
 
-  const toEmail = listUniqueRecipientEmails(owner).join(', ')
-  try {
-    await sendOwnerTicketReplyNotification({
-      to: toEmail,
-      ownerName: normalizeOwnerName(owner),
-      tenantName: input.tenantName,
-      tenantAccessId: input.tenantAccessId,
-      propertyName: input.propertyName,
-      unitNumber: input.unitNumber,
-      subject: input.subject,
-      message: input.message,
-    })
-  } catch (error) {
-    console.error('[notifyOwnerTicketReply] email failed', error)
+  if (preferences.ticket_reply_email) {
+    const toEmail = listUniqueRecipientEmails(owner).join(', ')
+    try {
+      await sendOwnerTicketReplyNotification({
+        to: toEmail,
+        ownerName: normalizeOwnerName(owner),
+        tenantName: input.tenantName,
+        tenantAccessId: input.tenantAccessId,
+        propertyName: input.propertyName,
+        unitNumber: input.unitNumber,
+        subject: input.subject,
+        message: input.message,
+      })
+    } catch (error) {
+      console.error('[notifyOwnerTicketReply] email failed', error)
+    }
   }
 
-  try {
-    const telegramLink = await getOwnerTelegramChatLink({
-      organizationId: input.organizationId,
-      ownerId: input.ownerId,
-    })
-
-    if (telegramLink) {
-      await sendTelegramMessage({
-        chatId: telegramLink.chat_id,
-        text: [
-          'New tenant reply',
-          `Tenant: ${input.tenantName} (${input.tenantAccessId})`,
-          `Subject: ${input.subject}`,
-          `Reply: ${input.message.length > 500 ? `${input.message.slice(0, 500)}...` : input.message}`,
-        ].join('\n'),
+  if (preferences.ticket_reply_telegram) {
+    try {
+      const telegramLink = await getOwnerTelegramChatLink({
+        organizationId: input.organizationId,
+        ownerId: input.ownerId,
       })
+
+      if (telegramLink) {
+        await sendTelegramMessageWithRetry({
+          chatId: telegramLink.chat_id,
+          text: [
+            'New tenant reply',
+            `Ticket: #${input.ticketId.slice(0, 8)}`,
+            `Tenant: ${input.tenantName} (${input.tenantAccessId})`,
+            `Subject: ${input.subject}`,
+            `Reply: ${input.message.length > 500 ? `${input.message.slice(0, 500)}...` : input.message}`,
+          ].join('\n'),
+          logContext: {
+            organizationId: input.organizationId,
+            ownerId: input.ownerId,
+            tenantId: input.tenantId,
+            userRole: 'owner',
+            eventType: 'ticket_reply',
+            metadata: {
+              ticket_id: input.ticketId,
+            },
+          },
+        })
+      }
+    } catch (error) {
+      console.error('[notifyOwnerTicketReply] telegram failed', error)
     }
-  } catch (error) {
-    console.error('[notifyOwnerTicketReply] telegram failed', error)
   }
 }
 
@@ -218,6 +264,7 @@ export async function notifyOwnerRentPaymentAwaitingApproval(input: {
   if (!owner) {
     throw new AppError('Owner not found for rent payment notification', 404)
   }
+  const preferences = await getOwnerNotificationPreferences(input.ownerId, input.organizationId)
 
   const dueDate = new Date(input.dueDateIso)
   const dueDateLabel = Number.isNaN(dueDate.getTime())
@@ -234,20 +281,52 @@ export async function notifyOwnerRentPaymentAwaitingApproval(input: {
     message: `${input.tenantName} (${input.tenantAccessId}) marked ${amountPaidLabel} as paid for due date ${dueDateLabel}.`,
   })
 
-  const toEmail = listUniqueRecipientEmails(owner).join(', ')
-  try {
-    await sendOwnerRentPaymentApprovalNotification({
-      to: toEmail,
-      ownerName: normalizeOwnerName(owner),
-      tenantName: input.tenantName,
-      tenantAccessId: input.tenantAccessId,
-      propertyName: input.propertyName,
-      unitNumber: input.unitNumber,
-      dueDateLabel,
-      amountPaidLabel,
-    })
-  } catch (error) {
-    console.error('[notifyOwnerRentPaymentAwaitingApproval] email failed', error)
+  if (preferences.rent_payment_awaiting_approval_email) {
+    const toEmail = listUniqueRecipientEmails(owner).join(', ')
+    try {
+      await sendOwnerRentPaymentApprovalNotification({
+        to: toEmail,
+        ownerName: normalizeOwnerName(owner),
+        tenantName: input.tenantName,
+        tenantAccessId: input.tenantAccessId,
+        propertyName: input.propertyName,
+        unitNumber: input.unitNumber,
+        dueDateLabel,
+        amountPaidLabel,
+      })
+    } catch (error) {
+      console.error('[notifyOwnerRentPaymentAwaitingApproval] email failed', error)
+    }
+  }
+
+  if (preferences.rent_payment_awaiting_approval_telegram) {
+    try {
+      const telegramLink = await getOwnerTelegramChatLink({
+        organizationId: input.organizationId,
+        ownerId: input.ownerId,
+      })
+
+      if (telegramLink) {
+        await sendTelegramMessageWithRetry({
+          chatId: telegramLink.chat_id,
+          text: [
+            'Rent payment awaiting approval',
+            `Tenant: ${input.tenantName} (${input.tenantAccessId})`,
+            `Due date: ${dueDateLabel}`,
+            `Amount: ${amountPaidLabel}`,
+          ].join('\n'),
+          logContext: {
+            organizationId: input.organizationId,
+            ownerId: input.ownerId,
+            tenantId: input.tenantId,
+            userRole: 'owner',
+            eventType: 'rent_payment_awaiting_approval',
+          },
+        })
+      }
+    } catch (error) {
+      console.error('[notifyOwnerRentPaymentAwaitingApproval] telegram failed', error)
+    }
   }
 }
 
@@ -286,6 +365,38 @@ export async function notifyTenantTicketReply(input: {
     })
   } catch (error) {
     console.error('[notifyTenantTicketReply] email failed', {
+      tenantId: input.tenantId,
+      subject: input.subject,
+      error,
+    })
+  }
+
+  try {
+    const telegramLink = await getTenantTelegramChatLink({
+      organizationId: input.organizationId,
+      tenantId: input.tenantId,
+    })
+
+    if (telegramLink) {
+      await sendTelegramMessageWithRetry({
+        chatId: telegramLink.chat_id,
+        text: [
+          'Support ticket update',
+          `Subject: ${input.subject}`,
+          `From: ${input.senderName} (${input.senderRoleLabel})`,
+          `Message: ${input.message.length > 500 ? `${input.message.slice(0, 500)}...` : input.message}`,
+        ].join('\n'),
+        logContext: {
+          organizationId: input.organizationId,
+          ownerId: input.ownerId,
+          tenantId: input.tenantId,
+          userRole: 'tenant',
+          eventType: 'tenant_ticket_reply',
+        },
+      })
+    }
+  } catch (error) {
+    console.error('[notifyTenantTicketReply] telegram failed', {
       tenantId: input.tenantId,
       subject: input.subject,
       error,
@@ -333,6 +444,65 @@ export async function notifyTenantTicketClosed(input: {
       error,
     })
   }
+
+  try {
+    const telegramLink = await getTenantTelegramChatLink({
+      organizationId: input.organizationId,
+      tenantId: input.tenantId,
+    })
+
+    if (telegramLink) {
+      await sendTelegramMessageWithRetry({
+        chatId: telegramLink.chat_id,
+        text: [
+          'Support ticket closed',
+          `Subject: ${input.subject}`,
+          `Closed by: ${input.senderName} (${input.senderRoleLabel})`,
+          ...(input.closingMessage?.trim() ? [`Note: ${input.closingMessage.trim()}`] : []),
+        ].join('\n'),
+        logContext: {
+          organizationId: input.organizationId,
+          ownerId: input.ownerId,
+          tenantId: input.tenantId,
+          userRole: 'tenant',
+          eventType: 'tenant_ticket_closed',
+        },
+      })
+    }
+  } catch (error) {
+    console.error('[notifyTenantTicketClosed] telegram failed', {
+      tenantId: input.tenantId,
+      subject: input.subject,
+      error,
+    })
+  }
+}
+
+export async function notifyTenantTicketStatusUpdated(input: {
+  organizationId: string
+  ownerId: string
+  tenantId: string
+  tenantEmail: string | null
+  tenantName: string
+  subject: string
+  senderName: string
+  senderRoleLabel: string
+  status: 'open' | 'in_progress' | 'resolved' | 'closed'
+}) {
+  const statusLabel = input.status.replaceAll('_', ' ')
+  await notifyTenantTicketReply({
+    organizationId: input.organizationId,
+    ownerId: input.ownerId,
+    tenantId: input.tenantId,
+    tenantEmail: input.tenantEmail,
+    tenantName: input.tenantName,
+    subject: input.subject,
+    senderName: input.senderName,
+    senderRoleLabel: input.senderRoleLabel,
+    propertyName: null,
+    unitNumber: null,
+    message: `Ticket status changed to ${statusLabel}.`,
+  })
 }
 
 export async function notifyTenantAccountProvisioned(input: {
@@ -461,6 +631,41 @@ export async function notifyTenantRentPaymentReviewed(input: {
     })
   } catch (error) {
     console.error('[notifyTenantRentPaymentReviewed] email failed', {
+      tenantId: input.tenantId,
+      status: input.status,
+      error,
+    })
+  }
+
+  try {
+    const telegramLink = await getTenantTelegramChatLink({
+      organizationId: input.organizationId,
+      tenantId: input.tenantId,
+    })
+
+    if (telegramLink) {
+      await sendTelegramMessageWithRetry({
+        chatId: telegramLink.chat_id,
+        text:
+          input.status === 'approved'
+            ? ['Rent payment approved', `Amount: ${amountPaidLabel}`, `Due date: ${dueDateLabel}`].join('\n')
+            : [
+                'Rent payment rejected',
+                `Amount: ${amountPaidLabel}`,
+                `Due date: ${dueDateLabel}`,
+                `Reason: ${input.rejectionReason?.trim() || 'Please contact your property team.'}`,
+              ].join('\n'),
+        logContext: {
+          organizationId: input.organizationId,
+          ownerId: input.ownerId,
+          tenantId: input.tenantId,
+          userRole: 'tenant',
+          eventType: input.status === 'approved' ? 'rent_payment_approved' : 'rent_payment_rejected',
+        },
+      })
+    }
+  } catch (error) {
+    console.error('[notifyTenantRentPaymentReviewed] telegram failed', {
       tenantId: input.tenantId,
       status: input.status,
       error,

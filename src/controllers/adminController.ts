@@ -22,7 +22,8 @@ import {
 } from '../services/adminService.js'
 import { createAnalyticsEvent } from '../services/analyticsService.js'
 import { createBlogPost, deleteBlogPost, listBlogPosts, updateBlogPost } from '../services/blogService.js'
-import { notifyTenantTicketClosed, notifyTenantTicketReply } from '../services/notificationService.js'
+import { notifyTenantTicketClosed, notifyTenantTicketReply, notifyTenantTicketStatusUpdated } from '../services/notificationService.js'
+import { cleanupTelegramArtifacts } from '../services/telegramService.js'
 import { getAdminTicketThread, replyToTicketAsAdmin, updateTicketStatusAsAdmin } from '../services/ticketThreadService.js'
 import {
   adminAnalyticsListQuerySchema,
@@ -36,6 +37,7 @@ import {
 } from '../validations/adminSchemas.js'
 import { adminBlogListQuerySchema, createBlogPostSchema, updateBlogPostSchema } from '../validations/blogSchemas.js'
 import { adminAutomationErrorsQuerySchema, adminAutomationRunsQuerySchema } from '../validations/automationSchemas.js'
+import { adminTelegramMaintenanceSchema } from '../validations/notificationSchemas.js'
 import { createTicketReplySchema, updateSupportTicketStatusSchema } from '../validations/ticketSchemas.js'
 
 function requireAdminId(request: Request): string {
@@ -292,6 +294,18 @@ export const patchAdminTicket = asyncHandler(async (request: Request, response: 
       unitNumber: tenant?.properties?.unit_number ?? null,
       closingMessage: parsed.closing_message ?? null,
     })
+  } else {
+    await notifyTenantTicketStatusUpdated({
+      organizationId: ticket.organization_id,
+      ownerId: ticket.owner_id,
+      tenantId: ticket.tenant_id,
+      tenantEmail: tenant?.email ?? null,
+      tenantName: tenant?.full_name ?? 'Tenant',
+      subject: ticket.subject,
+      senderName: admin?.full_name ?? admin?.email ?? 'Prophives Operations',
+      senderRoleLabel: 'Admin',
+      status: parsed.status,
+    })
   }
 
   await createAuditLog({
@@ -308,6 +322,28 @@ export const patchAdminTicket = asyncHandler(async (request: Request, response: 
   })
 
   response.json({ ok: true, ticket })
+})
+
+export const postAdminTelegramMaintenanceCleanup = asyncHandler(async (request: Request, response: Response) => {
+  const adminId = requireAdminId(request)
+  const parsed = adminTelegramMaintenanceSchema.parse(request.body ?? {})
+  const result = await cleanupTelegramArtifacts({
+    onboardingCodeMaxAgeHours: parsed.onboarding_code_max_age_hours,
+    deliveryLogMaxAgeDays: parsed.delivery_log_max_age_days,
+  })
+
+  await createAuditLog({
+    actor_id: adminId,
+    actor_role: 'admin',
+    action: 'telegram.maintenance_cleanup',
+    entity_type: 'telegram_artifact',
+    metadata: result,
+  })
+
+  response.json({
+    ok: true,
+    result,
+  })
 })
 
 export const getAdminContactMessages = asyncHandler(async (request: Request, response: Response) => {

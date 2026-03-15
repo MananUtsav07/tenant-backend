@@ -4,7 +4,13 @@ import type { Request, Response } from 'express'
 import { AppError, asyncHandler } from '../lib/errors.js'
 import { requireOrganizationContext } from '../middleware/organizationContext.js'
 import { createAuditLog } from '../services/auditLogService.js'
-import { notifyTenantAccountProvisioned, notifyTenantTicketClosed, notifyTenantTicketReply } from '../services/notificationService.js'
+import {
+  notifyTenantAccountProvisioned,
+  notifyTenantTicketClosed,
+  notifyTenantTicketReply,
+  notifyTenantTicketStatusUpdated,
+} from '../services/notificationService.js'
+import { getOwnerNotificationPreferences, updateOwnerNotificationPreferences } from '../services/ownerNotificationPreferenceService.js'
 import { getOwnerAutomationSettings, listOwnerAutomationActivity, updateOwnerAutomationSettings } from '../services/ownerAutomationService.js'
 import {
   createProperty,
@@ -33,7 +39,9 @@ import {
   getOwnerTelegramConnectionState,
   getTelegramBotUsername,
 } from '../services/telegramOnboardingService.js'
+import { listOwnerTelegramDeliveryLogs } from '../services/telegramService.js'
 import { createTenantSchema, createPropertySchema, updatePropertySchema, updateTenantSchema } from '../validations/ownerSchemas.js'
+import { ownerNotificationPreferencesUpdateSchema, ownerTelegramDeliveryLogsQuerySchema } from '../validations/notificationSchemas.js'
 import { ownerReviewRentPaymentSchema } from '../validations/rentPaymentSchemas.js'
 import { ownerAutomationActivityQuerySchema, ownerAutomationSettingsUpdateSchema } from '../validations/automationSchemas.js'
 import { createTicketReplySchema, updateSupportTicketStatusSchema } from '../validations/ticketSchemas.js'
@@ -399,6 +407,18 @@ export const patchOwnerTicket = asyncHandler(async (request: Request, response: 
       unitNumber: tenant?.properties?.unit_number ?? null,
       closingMessage: parsed.closing_message ?? null,
     })
+  } else {
+    await notifyTenantTicketStatusUpdated({
+      organizationId,
+      ownerId,
+      tenantId: ticket.tenant_id,
+      tenantEmail: tenant?.email ?? null,
+      tenantName: tenant?.full_name ?? 'Tenant',
+      subject: ticket.subject,
+      senderName,
+      senderRoleLabel: 'Owner',
+      status: parsed.status,
+    })
   }
 
   await createAuditLog({
@@ -415,6 +435,62 @@ export const patchOwnerTicket = asyncHandler(async (request: Request, response: 
   })
 
   response.json({ ok: true, ticket })
+})
+
+export const getOwnerNotificationPreferencesController = asyncHandler(async (request: Request, response: Response) => {
+  const { ownerId, organizationId } = requireOwnerContext(request)
+  const preferences = await getOwnerNotificationPreferences(ownerId, organizationId)
+
+  response.json({
+    ok: true,
+    preferences,
+  })
+})
+
+export const putOwnerNotificationPreferencesController = asyncHandler(async (request: Request, response: Response) => {
+  const { ownerId, organizationId } = requireOwnerContext(request)
+  const parsed = ownerNotificationPreferencesUpdateSchema.parse(request.body ?? {})
+  if (Object.keys(parsed).length === 0) {
+    throw new AppError('No notification preference fields provided', 400)
+  }
+
+  const preferences = await updateOwnerNotificationPreferences(ownerId, organizationId, parsed)
+  await createAuditLog({
+    organization_id: organizationId,
+    actor_id: ownerId,
+    actor_role: 'owner',
+    action: 'notification.preferences_updated',
+    entity_type: 'owner_notification_preferences',
+    entity_id: preferences.id,
+    metadata: parsed,
+  })
+
+  response.json({
+    ok: true,
+    preferences,
+  })
+})
+
+export const getOwnerTelegramDeliveryLogsController = asyncHandler(async (request: Request, response: Response) => {
+  const { ownerId, organizationId } = requireOwnerContext(request)
+  const parsed = ownerTelegramDeliveryLogsQuerySchema.parse(request.query)
+  const listed = await listOwnerTelegramDeliveryLogs({
+    organizationId,
+    ownerId,
+    page: parsed.page,
+    pageSize: parsed.page_size,
+  })
+
+  response.json({
+    ok: true,
+    items: listed.items,
+    pagination: {
+      page: parsed.page,
+      page_size: parsed.page_size,
+      total: listed.total,
+      total_pages: Math.max(1, Math.ceil(listed.total / parsed.page_size)),
+    },
+  })
 })
 
 export const getOwnerNotificationList = asyncHandler(async (request: Request, response: Response) => {

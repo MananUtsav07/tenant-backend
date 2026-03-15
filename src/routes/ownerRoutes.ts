@@ -4,11 +4,13 @@ import {
   createOwnerProperty,
   createOwnerTenant,
   getOwnerNotificationList,
+  getOwnerNotificationPreferencesController,
   getOwnerAutomationActivityController,
   getOwnerAutomationSettingsController,
   getOwnerRentPaymentApprovals,
   getOwnerProperties,
   getOwnerSummary,
+  getOwnerTelegramDeliveryLogsController,
   getOwnerTelegramOnboarding,
   getOwnerTenantById,
   getOwnerTicketById,
@@ -22,6 +24,7 @@ import {
   patchOwnerTicket,
   postOwnerTicketReply,
   postOwnerTelegramDisconnect,
+  putOwnerNotificationPreferencesController,
   processReminders,
   putOwnerAutomationSettingsController,
   removeOwnerProperty,
@@ -51,10 +54,13 @@ export function createOwnerRouter() {
   router.patch('/tickets/:id', patchOwnerTicket)
 
   router.get('/notifications', getOwnerNotificationList)
+  router.get('/notifications/preferences', getOwnerNotificationPreferencesController)
+  router.put('/notifications/preferences', putOwnerNotificationPreferencesController)
   router.patch('/notifications/read-all', markAllOwnerNotificationsRead)
   router.patch('/notifications/:id/read', markOwnerNotificationRead)
   router.get('/telegram/onboarding', getOwnerTelegramOnboarding)
   router.post('/telegram/disconnect', postOwnerTelegramDisconnect)
+  router.get('/telegram/delivery-logs', getOwnerTelegramDeliveryLogsController)
 
   router.get('/dashboard-summary', getOwnerSummary)
   router.get('/rent-payment-approvals', getOwnerRentPaymentApprovals)

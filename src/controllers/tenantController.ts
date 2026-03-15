@@ -171,6 +171,7 @@ export const postTenantTicket = asyncHandler(async (request: Request, response: 
   })
 
   await notifyOwnerTicketCreated({
+    ticketId: ticket.id,
     organizationId,
     ownerId,
     tenantId,
@@ -217,6 +218,7 @@ export const postTenantTicketReply = asyncHandler(async (request: Request, respo
   })
 
   await notifyOwnerTicketReply({
+    ticketId,
     organizationId,
     ownerId,
     tenantId,
