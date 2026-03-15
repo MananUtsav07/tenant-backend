@@ -1,5 +1,6 @@
 import type { PostgrestError } from '@supabase/supabase-js'
 
+import { env } from '../../config/env.js'
 import { AppError } from '../../lib/errors.js'
 import { supabaseAdmin } from '../../lib/supabase.js'
 import { isAiConfigured } from './aiClient.js'
@@ -21,7 +22,7 @@ function defaultAiSettings(organizationId: string): OrganizationAiSettings {
     ticket_classification_enabled: false,
     reminder_generation_enabled: false,
     ticket_summarization_enabled: false,
-    ai_model: 'gpt-4.1-mini',
+    ai_model: env.OPENAI_MODEL,
     created_at: now,
     updated_at: now,
   }
@@ -100,4 +101,3 @@ export async function getAdminAiStatusSummary(): Promise<AdminAiStatusSummary> {
     ticket_summarization_enabled_count: ticketSummarizationEnabledCountResult.count ?? 0,
   }
 }
-

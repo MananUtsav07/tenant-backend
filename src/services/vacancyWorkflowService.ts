@@ -367,7 +367,7 @@ async function generateListingDraft(input: {
     },
   })
 
-  if (aiResult.status === 'sent' && aiResult.output?.trim()) {
+  if (aiResult.status === 'generated' && aiResult.output?.trim()) {
     return {
       ...fallback,
       description: aiResult.output.trim(),

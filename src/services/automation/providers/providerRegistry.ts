@@ -1,5 +1,7 @@
 import { sendBrandedMessageEmail, type BrandedEmailOptions } from '../../../lib/mailer.js'
+import { env } from '../../../config/env.js'
 import { aiClient, isAiConfigured } from '../../ai/aiClient.js'
+import { getOrganizationAiSettings } from '../../ai/aiConfigService.js'
 import type {
   AIProvider,
   AutomationProviderRegistry,
@@ -47,6 +49,80 @@ class DefaultEmailProvider implements EmailProvider {
   }
 }
 
+type OpenAITextGenerationResponse = {
+  id?: string | null
+  output_text?: string | null
+}
+
+type OpenAIResponsesClient = {
+  responses?: {
+    create: (input: {
+      model: string
+      instructions?: string
+      input: string
+      metadata?: Record<string, string>
+    }) => Promise<OpenAITextGenerationResponse>
+  }
+}
+
+function normalizeMetadataValue(value: unknown): string | null {
+  if (value === null || typeof value === 'undefined') {
+    return null
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    return trimmed.length > 0 ? trimmed : null
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value)
+  }
+
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return null
+  }
+}
+
+function normalizeOpenAiMetadata(metadata?: Record<string, unknown>): Record<string, string> | undefined {
+  if (!metadata) {
+    return undefined
+  }
+
+  const normalizedEntries = Object.entries(metadata)
+    .map(([key, value]) => [key, normalizeMetadataValue(value)] as const)
+    .filter((entry): entry is [string, string] => entry[1] !== null)
+
+  if (normalizedEntries.length === 0) {
+    return undefined
+  }
+
+  return Object.fromEntries(normalizedEntries)
+}
+
+async function resolveAiModelSelection(organizationId?: string | null) {
+  const defaultModel = env.OPENAI_MODEL
+
+  if (!organizationId) {
+    return {
+      enabled: true,
+      model: defaultModel,
+      settingsSource: 'env_default' as const,
+    }
+  }
+
+  const settings = await getOrganizationAiSettings(organizationId)
+  const preferredModel = settings.ai_model?.trim() || defaultModel
+
+  return {
+    enabled: settings.automation_enabled,
+    model: preferredModel,
+    settingsSource: settings.id === 'default' ? ('env_default' as const) : ('organization' as const),
+  }
+}
+
 class DefaultAIProvider implements AIProvider {
   async generateText(input: {
     organizationId?: string | null
@@ -60,18 +136,82 @@ class DefaultAIProvider implements AIProvider {
         status: 'skipped' as const,
         reason: 'ai_not_configured',
         output: null,
-        model: null,
+        model: env.OPENAI_MODEL,
         metadata: input.metadata,
       }
     }
 
-    return {
-      provider: 'openai',
-      status: 'skipped' as const,
-      reason: 'provider_adapter_not_implemented',
-      output: null,
-      model: null,
-      metadata: input.metadata,
+    const modelSelection = await resolveAiModelSelection(input.organizationId)
+
+    if (!modelSelection.enabled) {
+      return {
+        provider: 'openai',
+        status: 'skipped' as const,
+        reason: 'ai_automation_disabled',
+        output: null,
+        model: modelSelection.model,
+        metadata: {
+          ...input.metadata,
+          settings_source: modelSelection.settingsSource,
+        },
+      }
+    }
+
+    try {
+      const client = aiClient as OpenAIResponsesClient
+      const response = await client.responses!.create({
+        model: modelSelection.model,
+        instructions: input.systemPrompt,
+        input: input.prompt,
+        metadata: normalizeOpenAiMetadata({
+          ...input.metadata,
+          organization_id: input.organizationId ?? null,
+          settings_source: modelSelection.settingsSource,
+        }),
+      })
+
+      const output = response.output_text?.trim() ?? ''
+      if (!output) {
+        return {
+          provider: 'openai',
+          status: 'failed' as const,
+          reason: 'empty_output',
+          output: null,
+          model: modelSelection.model,
+          externalId: response.id ?? null,
+          metadata: {
+            ...input.metadata,
+            settings_source: modelSelection.settingsSource,
+          },
+        }
+      }
+
+      return {
+        provider: 'openai',
+        status: 'generated' as const,
+        output,
+        model: modelSelection.model,
+        externalId: response.id ?? null,
+        metadata: {
+          ...input.metadata,
+          settings_source: modelSelection.settingsSource,
+        },
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown OpenAI error'
+
+      return {
+        provider: 'openai',
+        status: 'failed' as const,
+        reason: 'provider_request_failed',
+        output: null,
+        model: modelSelection.model,
+        metadata: {
+          ...input.metadata,
+          settings_source: modelSelection.settingsSource,
+          error: message,
+        },
+      }
     }
   }
 }

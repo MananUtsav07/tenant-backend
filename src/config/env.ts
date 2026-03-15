@@ -52,6 +52,7 @@ const envSchema = z.object({
   SMTP_PORT: z.coerce.number().int().positive().default(465),
   SMTP_SECURE: optionalBoolean.default(true),
   OPENAI_API_KEY: optionalNonEmptyString,
+  OPENAI_MODEL: z.string().trim().min(1).default('gpt-4o-mini'),
   TELEGRAM_BOT_TOKEN: optionalNonEmptyString,
   TELEGRAM_BOT_USERNAME: optionalNonEmptyString,
   TELEGRAM_WEBHOOK_SECRET: optionalNonEmptyString,
