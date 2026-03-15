@@ -165,7 +165,7 @@ type TenantRentPaymentRejectedPayload = {
   rejectionReason: string
 }
 
-type BrandedEmailOptions = {
+export type BrandedEmailOptions = {
   preheader?: string
   eyebrow: string
   title: string
@@ -494,6 +494,23 @@ function renderBrandedEmail(options: BrandedEmailOptions) {
     text,
     html,
   }
+}
+
+export async function sendBrandedMessageEmail(
+  payload: {
+    to: string
+    subject: string
+  } & BrandedEmailOptions,
+) {
+  const content = renderBrandedEmail(payload)
+
+  await transporter.sendMail({
+    from: env.EMAIL_FROM,
+    to: payload.to,
+    subject: payload.subject,
+    text: content.text,
+    html: content.html,
+  })
 }
 
 export async function sendOwnerTicketNotification(payload: TicketNotificationPayload) {

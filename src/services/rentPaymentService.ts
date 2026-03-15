@@ -3,6 +3,7 @@ import type { PostgrestError } from '@supabase/supabase-js'
 import { AppError } from '../lib/errors.js'
 import { supabaseAdmin } from '../lib/supabase.js'
 import { addDays } from '../utils/date.js'
+import { enqueueCashFlowRefreshJob } from './automationEngineService.js'
 import { notifyOwnerRentPaymentAwaitingApproval, notifyTenantRentPaymentReviewed } from './notificationService.js'
 import { getTenantById } from './tenantService.js'
 
@@ -75,6 +76,38 @@ function resolveCycleWindow(paymentDueDay: number, now: Date): CycleWindow {
     window_starts_at: addDays(previousDueDate, -7),
     is_current_cycle: false,
   }
+}
+
+async function syncApprovedRentLedgerEntry(input: {
+  organizationId: string
+  ownerId: string
+  tenantId: string
+  propertyId: string
+  cycleYear: number
+  cycleMonth: number
+  dueDate: string
+  amountPaid: number
+}) {
+  const { error } = await supabaseAdmin
+    .from('rent_ledger')
+    .upsert(
+      {
+        organization_id: input.organizationId,
+        owner_id: input.ownerId,
+        tenant_id: input.tenantId,
+        property_id: input.propertyId,
+        cycle_year: input.cycleYear,
+        cycle_month: input.cycleMonth,
+        due_date: input.dueDate,
+        amount_due: input.amountPaid,
+        amount_paid: input.amountPaid,
+        paid_date: new Date().toISOString().slice(0, 10),
+        status: 'paid',
+      },
+      { onConflict: 'organization_id,tenant_id,cycle_year,cycle_month' },
+    )
+
+  throwIfError(error, 'Failed to synchronize approved rent into ledger')
 }
 
 async function findApprovalForCycle(input: {
@@ -375,6 +408,27 @@ export async function reviewOwnerRentPaymentApproval(input: {
     status: input.action === 'approve' ? 'approved' : 'rejected',
     rejectionReason: input.action === 'reject' ? (data.rejection_reason as string | null) ?? null : null,
   })
+
+  if (input.action === 'approve') {
+    await syncApprovedRentLedgerEntry({
+      organizationId: input.organizationId,
+      ownerId: input.ownerId,
+      tenantId: data.tenant_id as string,
+      propertyId: data.property_id as string,
+      cycleYear: Number(data.cycle_year),
+      cycleMonth: Number(data.cycle_month),
+      dueDate: data.due_date as string,
+      amountPaid: Number(data.amount_paid ?? 0),
+    })
+
+    await enqueueCashFlowRefreshJob({
+      organizationId: input.organizationId,
+      ownerId: input.ownerId,
+      sourceType: 'rent_payment_approval',
+      sourceRef: input.approvalId,
+      scope: 'current',
+    })
+  }
 
   return data
 }

@@ -5,8 +5,15 @@ import {
   deleteAdminBlogPostById,
   getAdminAnalytics,
   getAdminAiStatus,
+  getAdminAutomationCompliance,
+  getAdminAutomationConditionReports,
+  getAdminAutomationCashFlow,
+  getAdminAutomationJobs,
   getAdminAutomationErrors,
   getAdminAutomationHealth,
+  getAdminAutomationPortfolioVisibility,
+  getAdminAutomationScreening,
+  getAdminAutomationVacancyCampaigns,
   getAdminAutomationRuns,
   getAdminBlogPosts,
   getAdminContactMessages,
@@ -23,6 +30,7 @@ import {
   patchAdminTicket,
   postAdminTelegramMaintenanceCleanup,
   postAdminBlogPost,
+  postAdminScreeningApplicant,
   postAdminTicketReply,
   putAdminBlogPost,
 } from '../controllers/adminController.js'
@@ -50,9 +58,17 @@ export function createAdminRouter() {
   router.get('/analytics', getAdminAnalytics)
   router.get('/ai-status', getAdminAiStatus)
   router.get('/automations/health', getAdminAutomationHealth)
+  router.get('/automations/compliance', getAdminAutomationCompliance)
+  router.get('/automations/condition-reports', getAdminAutomationConditionReports)
+  router.get('/automations/portfolio-visibility', getAdminAutomationPortfolioVisibility)
+  router.get('/automations/cash-flow', getAdminAutomationCashFlow)
+  router.get('/automations/vacancy-campaigns', getAdminAutomationVacancyCampaigns)
+  router.get('/automations/screening', getAdminAutomationScreening)
+  router.get('/automations/jobs', getAdminAutomationJobs)
   router.get('/automations/runs', getAdminAutomationRuns)
   router.get('/automations/errors', getAdminAutomationErrors)
   router.post('/telegram/maintenance-cleanup', postAdminTelegramMaintenanceCleanup)
+  router.post('/screening/applicants', postAdminScreeningApplicant)
   router.get('/system-health', getAdminSystemHealth)
 
   router.get('/blog', getAdminBlogPosts)

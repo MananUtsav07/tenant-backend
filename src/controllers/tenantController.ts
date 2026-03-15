@@ -2,7 +2,19 @@ import type { Request, Response } from 'express'
 
 import { AppError, asyncHandler } from '../lib/errors.js'
 import { createAuditLog } from '../services/auditLogService.js'
-import { notifyOwnerTicketCreated, notifyOwnerTicketReply } from '../services/notificationService.js'
+import { enqueueVacancyCampaignRefreshJob } from '../services/automationEngineService.js'
+import {
+  addConditionReportMediaReference,
+  confirmConditionReportAsTenant,
+  getTenantConditionReportDetail,
+  getTenantConditionReports,
+} from '../services/conditionReportService.js'
+import { notifyOwnerMaintenanceResolution, notifyOwnerTicketCreated, notifyOwnerTicketReply } from '../services/notificationService.js'
+import {
+  confirmTenantMaintenanceCompletion,
+  getTenantMaintenanceWorkflowOverview,
+  maybeInitializeMaintenanceWorkflowForTicket,
+} from '../services/maintenanceWorkflowService.js'
 import { getTenantRentPaymentState as loadTenantRentPaymentState, submitTenantRentPayment } from '../services/rentPaymentService.js'
 import { getTenantTicketThread, replyToTicketAsTenant } from '../services/ticketThreadService.js'
 import {
@@ -12,7 +24,10 @@ import {
   getTenantTelegramConnectionState,
 } from '../services/telegramOnboardingService.js'
 import { createTenantTicket, getOwnerContactByTenant, getTenantById, getTenantSummary, listTenantTickets } from '../services/tenantService.js'
+import { detectVacancyIntentFromTicket } from '../services/vacancyWorkflowService.js'
 import { nextDueDateFromDay } from '../utils/date.js'
+import { tenantMaintenanceCompletionSchema } from '../validations/maintenanceWorkflowSchemas.js'
+import { addConditionReportMediaSchema, confirmConditionReportSchema } from '../validations/conditionReportSchemas.js'
 import { tenantMarkRentPaidSchema } from '../validations/rentPaymentSchemas.js'
 import { createTenantTicketSchema } from '../validations/tenantSchemas.js'
 import { createTicketReplySchema } from '../validations/ticketSchemas.js'
@@ -82,6 +97,91 @@ export const getTenantProperty = asyncHandler(async (request: Request, response:
       lease_end_date: tenant.lease_end_date,
     },
   })
+})
+
+export const getTenantConditionReportsController = asyncHandler(async (request: Request, response: Response) => {
+  const { tenantId, organizationId } = requireTenantIdentity(request)
+  const condition_reports = await getTenantConditionReports({
+    organizationId,
+    tenantId,
+  })
+
+  response.json({ ok: true, condition_reports })
+})
+
+export const getTenantConditionReportDetailController = asyncHandler(async (request: Request, response: Response) => {
+  const { tenantId, organizationId } = requireTenantIdentity(request)
+  const reportId = readPathId(request, 'reportId')
+
+  const report = await getTenantConditionReportDetail({
+    organizationId,
+    tenantId,
+    reportId,
+  })
+
+  if (!report) {
+    throw new AppError('Condition report not found', 404)
+  }
+
+  response.json({ ok: true, report })
+})
+
+export const postTenantConditionReportMediaController = asyncHandler(async (request: Request, response: Response) => {
+  const { tenantId, organizationId } = requireTenantIdentity(request)
+  const reportId = readPathId(request, 'reportId')
+  const parsed = addConditionReportMediaSchema.parse(request.body)
+
+  const report = await addConditionReportMediaReference({
+    organizationId,
+    reportId,
+    roomEntryId: parsed.room_entry_id,
+    actorRole: 'tenant',
+    actorTenantId: tenantId,
+    payload: parsed,
+  })
+
+  await createAuditLog({
+    organization_id: organizationId,
+    actor_id: tenantId,
+    actor_role: 'tenant',
+    action: 'condition_report.media_added',
+    entity_type: 'condition_report_media',
+    entity_id: reportId,
+    metadata: {
+      room_entry_id: parsed.room_entry_id,
+      media_kind: parsed.media_kind,
+    },
+  })
+
+  response.status(201).json({ ok: true, report })
+})
+
+export const postTenantConditionReportConfirmController = asyncHandler(async (request: Request, response: Response) => {
+  const { tenantId, organizationId } = requireTenantIdentity(request)
+  const reportId = readPathId(request, 'reportId')
+  const parsed = confirmConditionReportSchema.parse(request.body)
+
+  const report = await confirmConditionReportAsTenant({
+    organizationId,
+    tenantId,
+    reportId,
+    status: parsed.status,
+    note: parsed.note ?? null,
+  })
+
+  await createAuditLog({
+    organization_id: organizationId,
+    actor_id: tenantId,
+    actor_role: 'tenant',
+    action: 'condition_report.confirmed',
+    entity_type: 'condition_report',
+    entity_id: reportId,
+    metadata: {
+      confirmation_status: parsed.status,
+    },
+  })
+
+  response.json({ ok: true, report })
 })
 
 export const getTenantTickets = asyncHandler(async (request: Request, response: Response) => {
@@ -196,6 +296,37 @@ export const postTenantTicket = asyncHandler(async (request: Request, response: 
     },
   })
 
+  await maybeInitializeMaintenanceWorkflowForTicket({
+    ticketId: ticket.id,
+    organizationId,
+  })
+
+  const vacancySignal = detectVacancyIntentFromTicket({
+    subject: parsed.subject,
+    message: parsed.message,
+    tenantLeaseEndDate: tenant.lease_end_date,
+  })
+
+  if (vacancySignal.isVacancyNotice && tenant.property_id) {
+    void enqueueVacancyCampaignRefreshJob({
+      organizationId,
+      ownerId,
+      propertyId: tenant.property_id,
+      tenantId,
+      sourceType: 'tenant_notice',
+      expectedVacancyDate: vacancySignal.suggestedExpectedVacancyDate ?? tenant.lease_end_date ?? new Date().toISOString().slice(0, 10),
+      triggerReference: `ticket:${ticket.id}`,
+      triggerNotes: `${vacancySignal.reason} Ticket subject: ${parsed.subject}`,
+      vacancyState: tenant.lease_end_date && tenant.lease_end_date <= new Date().toISOString().slice(0, 10) ? 'vacant' : 'pre_vacant',
+    }).catch((error) => {
+      console.error('[postTenantTicket] vacancy campaign enqueue failed', {
+        ticketId: ticket.id,
+        tenantId,
+        error,
+      })
+    })
+  }
+
   response.status(201).json({ ok: true, ticket })
 })
 
@@ -244,6 +375,83 @@ export const postTenantTicketReply = asyncHandler(async (request: Request, respo
   })
 
   response.status(201).json({ ok: true, message: result.message })
+})
+
+export const getTenantTicketMaintenanceWorkflow = asyncHandler(async (request: Request, response: Response) => {
+  const { tenantId, organizationId } = requireTenantIdentity(request)
+  const ticketId = readPathId(request, 'id')
+
+  const workflow = await getTenantMaintenanceWorkflowOverview({
+    ticketId,
+    tenantId,
+    organizationId,
+  })
+
+  if (!workflow) {
+    throw new AppError('Ticket not found', 404)
+  }
+
+  response.json({
+    ok: true,
+    maintenance: workflow,
+  })
+})
+
+export const postTenantMaintenanceCompletion = asyncHandler(async (request: Request, response: Response) => {
+  const { tenantId, ownerId, organizationId } = requireTenantIdentity(request)
+  const ticketId = readPathId(request, 'id')
+  const parsed = tenantMaintenanceCompletionSchema.parse(request.body ?? {})
+
+  const tenant = await getTenantById(tenantId, organizationId)
+  if (!tenant) {
+    throw new AppError('Tenant not found', 404)
+  }
+
+  const workflow = await confirmTenantMaintenanceCompletion({
+    ticketId,
+    tenantId,
+    organizationId,
+    resolved: parsed.resolved,
+    feedbackRating: parsed.feedback_rating,
+    feedbackNote: parsed.feedback_note,
+  })
+
+  if (!workflow?.workflow) {
+    throw new AppError('Maintenance workflow not found', 404)
+  }
+
+  await notifyOwnerMaintenanceResolution({
+    organizationId,
+    ownerId,
+    tenantId,
+    tenantName: tenant.full_name,
+    tenantAccessId: tenant.tenant_access_id,
+    propertyName: tenant.properties?.property_name ?? null,
+    unitNumber: tenant.properties?.unit_number ?? null,
+    subject: workflow.ticket.subject,
+    resolved: parsed.resolved,
+    feedbackNote: parsed.feedback_note ?? null,
+  })
+
+  await createAuditLog({
+    organization_id: organizationId,
+    actor_id: tenantId,
+    actor_role: 'tenant',
+    action: parsed.resolved ? 'maintenance.confirmed' : 'maintenance.follow_up_requested',
+    entity_type: 'maintenance_assignment',
+    entity_id: workflow.workflow.assignment?.id ?? workflow.workflow.id,
+    metadata: {
+      ticket_id: workflow.ticket.id,
+      resolved: parsed.resolved,
+      feedback_rating: parsed.feedback_rating ?? null,
+      feedback_note_present: Boolean(parsed.feedback_note),
+    },
+  })
+
+  response.status(201).json({
+    ok: true,
+    maintenance: workflow,
+  })
 })
 
 export const getTenantOwnerContact = asyncHandler(async (request: Request, response: Response) => {

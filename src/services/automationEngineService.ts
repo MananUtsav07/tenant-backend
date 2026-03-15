@@ -2,30 +2,17 @@ import type { PostgrestError } from '@supabase/supabase-js'
 
 import { AppError } from '../lib/errors.js'
 import { supabaseAdmin } from '../lib/supabase.js'
-import { runComplianceAlerts } from './complianceService.js'
-import { runDailyPortfolioVisibility } from './portfolioVisibilityService.js'
-import { runRentChasing } from './rentChasingService.js'
-
-export type AutomationJobType = 'compliance_scan' | 'rent_chase_scan' | 'portfolio_daily_digest'
-
-type AutomationJobRow = {
-  id: string
-  organization_id: string | null
-  owner_id: string | null
-  job_type: AutomationJobType
-  dedupe_key: string
-  payload: Record<string, unknown>
-  run_at: string
-  status: 'pending' | 'processing' | 'completed' | 'failed' | 'canceled'
-  attempts: number
-  max_attempts: number
-}
+import { dispatchAutomationJobs } from './automation/core/dispatcherService.js'
+import { listAutomationJobs, queueAutomationJob, queueEventAutomationJob, queueScheduledAutomationJobs } from './automation/core/jobQueueService.js'
+import { listAutomationRegistryEntries } from './automation/core/registry.js'
+import { type AutomationRunStatus } from './automation/core/types.js'
+import { automationJobCatalog, isAutomationJobType, type AutomationJobType } from './automation/jobTypes.js'
 
 type ListAutomationRunsInput = {
   page: number
   page_size: number
   flow_name?: string
-  status?: 'success' | 'failed' | 'partial'
+  status?: AutomationRunStatus
   organization_id?: string
 }
 
@@ -36,72 +23,18 @@ type ListAutomationErrorsInput = {
   organization_id?: string
 }
 
+type ListAutomationJobsInput = {
+  page: number
+  page_size: number
+  job_type?: string
+  lifecycle_status?: string
+  organization_id?: string
+}
+
 function throwIfError(error: PostgrestError | null, message: string): void {
   if (error) {
     throw new AppError(message, 500, error.message)
   }
-}
-
-async function insertAutomationRun(input: {
-  jobId: string
-  organizationId: string | null
-  ownerId: string | null
-  flowName: string
-  status: 'success' | 'failed' | 'partial'
-  startedAt: string
-  completedAt: string
-  processedCount: number
-  metadata: Record<string, unknown>
-}) {
-  const { error } = await supabaseAdmin.from('automation_runs').insert({
-    job_id: input.jobId,
-    organization_id: input.organizationId,
-    owner_id: input.ownerId,
-    flow_name: input.flowName,
-    status: input.status,
-    started_at: input.startedAt,
-    completed_at: input.completedAt,
-    processed_count: input.processedCount,
-    metadata: input.metadata,
-  })
-
-  throwIfError(error, 'Failed to insert automation run record')
-}
-
-async function insertAutomationError(input: {
-  jobId: string
-  organizationId: string | null
-  ownerId: string | null
-  flowName: string
-  errorMessage: string
-  context: Record<string, unknown>
-}) {
-  const { error } = await supabaseAdmin.from('automation_errors').insert({
-    job_id: input.jobId,
-    organization_id: input.organizationId,
-    owner_id: input.ownerId,
-    flow_name: input.flowName,
-    error_message: input.errorMessage,
-    context: input.context,
-  })
-
-  throwIfError(error, 'Failed to insert automation error record')
-}
-
-async function executeJob(job: AutomationJobRow, now: Date) {
-  if (job.job_type === 'compliance_scan') {
-    return runComplianceAlerts(now)
-  }
-
-  if (job.job_type === 'rent_chase_scan') {
-    return runRentChasing(now)
-  }
-
-  if (job.job_type === 'portfolio_daily_digest') {
-    return runDailyPortfolioVisibility(now)
-  }
-
-  throw new AppError(`Unsupported automation job type: ${job.job_type}`, 400)
 }
 
 export async function enqueueAutomationJob(input: {
@@ -112,224 +45,142 @@ export async function enqueueAutomationJob(input: {
   runAt?: string
   payload?: Record<string, unknown>
 }) {
-  const { data: existing, error: existingError } = await supabaseAdmin
-    .from('automation_jobs')
-    .select('id, status')
-    .eq('dedupe_key', input.dedupeKey)
-    .maybeSingle()
+  return queueAutomationJob({
+    jobType: input.jobType,
+    dedupeKey: input.dedupeKey,
+    organizationId: input.organizationId,
+    ownerId: input.ownerId,
+    runAt: input.runAt,
+    payload: input.payload,
+    triggerType: 'manual',
+  })
+}
 
-  throwIfError(existingError, 'Failed to check existing automation job')
+export async function enqueueEventDrivenAutomationJob(input: {
+  jobType: AutomationJobType
+  dedupeKey: string
+  organizationId?: string | null
+  ownerId?: string | null
+  payload?: Record<string, unknown>
+  sourceType: string
+  sourceRef: string
+  runAt?: string
+}) {
+  return queueEventAutomationJob(input)
+}
 
-  if (existing) {
-    return {
-      created: false,
-      job_id: existing.id,
-      status: existing.status,
-    }
-  }
+export async function enqueueCashFlowRefreshJob(input: {
+  organizationId: string
+  ownerId: string
+  sourceType: string
+  sourceRef: string
+  year?: number
+  month?: number
+  scope?: 'current' | 'monthly' | 'annual'
+}) {
+  return enqueueEventDrivenAutomationJob({
+    jobType: 'cash_flow_refresh',
+    dedupeKey: `cash_flow_refresh:${input.ownerId}:${input.sourceType}:${input.sourceRef}:${input.scope ?? 'current'}:${input.year ?? 'na'}-${input.month ?? 'na'}`,
+    organizationId: input.organizationId,
+    ownerId: input.ownerId,
+    sourceType: input.sourceType,
+    sourceRef: input.sourceRef,
+    payload: {
+      organization_id: input.organizationId,
+      owner_id: input.ownerId,
+      scope: input.scope ?? 'current',
+      year: input.year,
+      month: input.month,
+    },
+  })
+}
 
-  const { data, error } = await supabaseAdmin
-    .from('automation_jobs')
-    .insert({
-      organization_id: input.organizationId ?? null,
-      owner_id: input.ownerId ?? null,
-      job_type: input.jobType,
-      dedupe_key: input.dedupeKey,
-      payload: input.payload ?? {},
-      run_at: input.runAt ?? new Date().toISOString(),
-      status: 'pending',
-      attempts: 0,
-      max_attempts: 3,
-    })
-    .select('id, status')
-    .single()
+export async function enqueueMaintenanceFollowUpJob(input: {
+  organizationId: string
+  ownerId: string
+  workflowId: string
+  ticketId: string
+  runAt: string
+}) {
+  return enqueueEventDrivenAutomationJob({
+    jobType: 'maintenance_follow_up_check',
+    dedupeKey: `maintenance_follow_up:${input.workflowId}:${input.runAt}`,
+    organizationId: input.organizationId,
+    ownerId: input.ownerId,
+    sourceType: 'maintenance_workflow',
+    sourceRef: input.workflowId,
+    runAt: input.runAt,
+    payload: {
+      workflow_id: input.workflowId,
+      organization_id: input.organizationId,
+      owner_id: input.ownerId,
+      ticket_id: input.ticketId,
+    },
+  })
+}
 
-  throwIfError(error, 'Failed to enqueue automation job')
-  if (!data) {
-    throw new AppError('Failed to enqueue automation job', 500)
-  }
+export async function enqueueVacancyCampaignRefreshJob(input: {
+  organizationId: string
+  ownerId: string
+  propertyId: string
+  tenantId?: string | null
+  sourceType: 'tenant_notice' | 'lease_expiry' | 'manual'
+  expectedVacancyDate: string
+  triggerReference?: string | null
+  triggerNotes?: string | null
+  vacancyState?: 'pre_vacant' | 'vacant' | 'relisting_in_progress'
+}) {
+  return enqueueEventDrivenAutomationJob({
+    jobType: 'vacancy_campaign_refresh',
+    dedupeKey: `vacancy_campaign_refresh:${input.propertyId}:${input.sourceType}:${input.expectedVacancyDate}`,
+    organizationId: input.organizationId,
+    ownerId: input.ownerId,
+    sourceType: 'vacancy_campaign',
+    sourceRef: input.triggerReference ?? input.propertyId,
+    payload: {
+      organization_id: input.organizationId,
+      owner_id: input.ownerId,
+      property_id: input.propertyId,
+      tenant_id: input.tenantId ?? null,
+      source_type: input.sourceType,
+      expected_vacancy_date: input.expectedVacancyDate,
+      trigger_reference: input.triggerReference ?? null,
+      trigger_notes: input.triggerNotes ?? null,
+      vacancy_state: input.vacancyState,
+    },
+  })
+}
 
-  return {
-    created: true,
-    job_id: data.id as string,
-    status: data.status as string,
-  }
+export async function ensureScheduledAutomationJobs(now = new Date()) {
+  return queueScheduledAutomationJobs(now)
 }
 
 export async function ensureDailyAutomationJobs(now = new Date()) {
-  const dateKey = now.toISOString().slice(0, 10)
-
-  const [compliance, rentChase, dailyDigest] = await Promise.all([
-    enqueueAutomationJob({
-      jobType: 'compliance_scan',
-      dedupeKey: `compliance_scan:${dateKey}`,
-      payload: { date_key: dateKey },
-      runAt: now.toISOString(),
-    }),
-    enqueueAutomationJob({
-      jobType: 'rent_chase_scan',
-      dedupeKey: `rent_chase_scan:${dateKey}`,
-      payload: { date_key: dateKey },
-      runAt: now.toISOString(),
-    }),
-    enqueueAutomationJob({
-      jobType: 'portfolio_daily_digest',
-      dedupeKey: `portfolio_daily_digest:${dateKey}`,
-      payload: { date_key: dateKey },
-      runAt: now.toISOString(),
-    }),
-  ])
-
-  return {
-    date_key: dateKey,
-    jobs: [compliance, rentChase, dailyDigest],
-    created_count: [compliance, rentChase, dailyDigest].filter((job) => job.created).length,
-  }
+  return ensureScheduledAutomationJobs(now)
 }
 
 export async function dispatchPendingAutomationJobs(input?: { limit?: number; now?: Date }) {
-  const limit = input?.limit ?? 20
-  const now = input?.now ?? new Date()
-  const nowIso = now.toISOString()
-
-  const { data, error } = await supabaseAdmin
-    .from('automation_jobs')
-    .select('id, organization_id, owner_id, job_type, dedupe_key, payload, run_at, status, attempts, max_attempts')
-    .eq('status', 'pending')
-    .lte('run_at', nowIso)
-    .order('run_at', { ascending: true })
-    .limit(limit)
-
-  throwIfError(error, 'Failed to load pending automation jobs')
-
-  let claimed = 0
-  let succeeded = 0
-  let failed = 0
-  let retried = 0
-
-  const jobs = (data ?? []) as AutomationJobRow[]
-
-  for (const candidate of jobs) {
-    const { data: claimedJob, error: claimError } = await supabaseAdmin
-      .from('automation_jobs')
-      .update({
-        status: 'processing',
-        locked_at: nowIso,
-        attempts: candidate.attempts + 1,
-        last_error: null,
-      })
-      .eq('id', candidate.id)
-      .eq('status', 'pending')
-      .select('id, organization_id, owner_id, job_type, dedupe_key, payload, run_at, status, attempts, max_attempts')
-      .maybeSingle()
-
-    throwIfError(claimError, 'Failed to claim automation job')
-
-    if (!claimedJob) {
-      continue
-    }
-
-    claimed += 1
-    const startedAt = new Date().toISOString()
-
-    try {
-      const result = await executeJob(claimedJob as AutomationJobRow, now)
-
-      const { error: completeError } = await supabaseAdmin
-        .from('automation_jobs')
-        .update({
-          status: 'completed',
-          processed_at: new Date().toISOString(),
-          locked_at: null,
-        })
-        .eq('id', claimedJob.id)
-
-      throwIfError(completeError, 'Failed to complete automation job')
-
-      await insertAutomationRun({
-        jobId: claimedJob.id as string,
-        organizationId: (claimedJob.organization_id as string | null) ?? null,
-        ownerId: (claimedJob.owner_id as string | null) ?? null,
-        flowName: claimedJob.job_type as string,
-        status: 'success',
-        startedAt,
-        completedAt: new Date().toISOString(),
-        processedCount: 1,
-        metadata: result as Record<string, unknown>,
-      })
-
-      succeeded += 1
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown automation failure'
-      const nextAttemptCount = claimedJob.attempts as number
-      const maxAttempts = claimedJob.max_attempts as number
-      const shouldRetry = nextAttemptCount < maxAttempts
-
-      const retryAt = new Date(now.getTime() + Math.min(15, nextAttemptCount * 5) * 60 * 1000).toISOString()
-
-      const { error: failUpdateError } = await supabaseAdmin
-        .from('automation_jobs')
-        .update({
-          status: shouldRetry ? 'pending' : 'failed',
-          run_at: shouldRetry ? retryAt : claimedJob.run_at,
-          locked_at: null,
-          last_error: errorMessage,
-          processed_at: shouldRetry ? null : new Date().toISOString(),
-        })
-        .eq('id', claimedJob.id)
-
-      throwIfError(failUpdateError, 'Failed to update automation job failure state')
-
-      await insertAutomationRun({
-        jobId: claimedJob.id as string,
-        organizationId: (claimedJob.organization_id as string | null) ?? null,
-        ownerId: (claimedJob.owner_id as string | null) ?? null,
-        flowName: claimedJob.job_type as string,
-        status: shouldRetry ? 'partial' : 'failed',
-        startedAt,
-        completedAt: new Date().toISOString(),
-        processedCount: 0,
-        metadata: {
-          error: errorMessage,
-          retried: shouldRetry,
-        },
-      })
-
-      await insertAutomationError({
-        jobId: claimedJob.id as string,
-        organizationId: (claimedJob.organization_id as string | null) ?? null,
-        ownerId: (claimedJob.owner_id as string | null) ?? null,
-        flowName: claimedJob.job_type as string,
-        errorMessage,
-        context: {
-          attempts: nextAttemptCount,
-          max_attempts: maxAttempts,
-          retried: shouldRetry,
-        },
-      })
-
-      if (shouldRetry) {
-        retried += 1
-      } else {
-        failed += 1
-      }
-    }
-  }
-
-  return {
-    scanned: jobs.length,
-    claimed,
-    succeeded,
-    failed,
-    retried,
-  }
+  return dispatchAutomationJobs(input)
 }
 
 export async function getAutomationHealth() {
-  const [pendingResult, processingResult, failedResult, lastRunResult, lastErrorResult] = await Promise.all([
-    supabaseAdmin.from('automation_jobs').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
-    supabaseAdmin.from('automation_jobs').select('id', { count: 'exact', head: true }).eq('status', 'processing'),
-    supabaseAdmin.from('automation_jobs').select('id', { count: 'exact', head: true }).eq('status', 'failed'),
+  const dayAgoIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+
+  const [
+    queuedResult,
+    runningResult,
+    failedResult,
+    skippedResult,
+    lastRunResult,
+    lastErrorResult,
+    jobsSnapshotResult,
+    runs24hResult,
+    errors24hResult,
+  ] = await Promise.all([
+    supabaseAdmin.from('automation_jobs').select('id', { count: 'exact', head: true }).eq('lifecycle_status', 'queued'),
+    supabaseAdmin.from('automation_jobs').select('id', { count: 'exact', head: true }).eq('lifecycle_status', 'running'),
+    supabaseAdmin.from('automation_jobs').select('id', { count: 'exact', head: true }).eq('lifecycle_status', 'failed'),
+    supabaseAdmin.from('automation_jobs').select('id', { count: 'exact', head: true }).eq('lifecycle_status', 'skipped'),
     supabaseAdmin
       .from('automation_runs')
       .select('id, flow_name, status, completed_at')
@@ -342,18 +193,63 @@ export async function getAutomationHealth() {
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle(),
+    supabaseAdmin.from('automation_jobs').select('job_type, lifecycle_status'),
+    supabaseAdmin.from('automation_runs').select('id', { count: 'exact', head: true }).gte('started_at', dayAgoIso),
+    supabaseAdmin.from('automation_errors').select('id', { count: 'exact', head: true }).gte('created_at', dayAgoIso),
   ])
 
-  throwIfError(pendingResult.error, 'Failed to count pending automation jobs')
-  throwIfError(processingResult.error, 'Failed to count processing automation jobs')
+  throwIfError(queuedResult.error, 'Failed to count queued automation jobs')
+  throwIfError(runningResult.error, 'Failed to count running automation jobs')
   throwIfError(failedResult.error, 'Failed to count failed automation jobs')
+  throwIfError(skippedResult.error, 'Failed to count skipped automation jobs')
   throwIfError(lastRunResult.error, 'Failed to load latest automation run')
   throwIfError(lastErrorResult.error, 'Failed to load latest automation error')
+  throwIfError(jobsSnapshotResult.error, 'Failed to load automation job snapshot')
+  throwIfError(runs24hResult.error, 'Failed to count recent automation runs')
+  throwIfError(errors24hResult.error, 'Failed to count recent automation errors')
+
+  const queuedByFlow = new Map<AutomationJobType, { queued: number; running: number; failed: number; skipped: number }>()
+  for (const jobType of Object.keys(automationJobCatalog) as AutomationJobType[]) {
+    queuedByFlow.set(jobType, { queued: 0, running: 0, failed: 0, skipped: 0 })
+  }
+
+  for (const row of jobsSnapshotResult.data ?? []) {
+    const jobType = (row as { job_type?: string }).job_type
+    const lifecycleStatus = (row as { lifecycle_status?: string }).lifecycle_status
+    if (!jobType || !lifecycleStatus || !isAutomationJobType(jobType)) {
+      continue
+    }
+
+    const aggregate = queuedByFlow.get(jobType)
+    if (!aggregate) {
+      continue
+    }
+
+    if (lifecycleStatus === 'queued' || lifecycleStatus === 'running' || lifecycleStatus === 'failed' || lifecycleStatus === 'skipped') {
+      aggregate[lifecycleStatus] += 1
+    }
+  }
 
   return {
-    pending_jobs: pendingResult.count ?? 0,
-    processing_jobs: processingResult.count ?? 0,
+    pending_jobs: queuedResult.count ?? 0,
+    processing_jobs: runningResult.count ?? 0,
     failed_jobs: failedResult.count ?? 0,
+    skipped_jobs: skippedResult.count ?? 0,
+    runs_last_24h: runs24hResult.count ?? 0,
+    errors_last_24h: errors24hResult.count ?? 0,
+    registered_handlers: listAutomationRegistryEntries().length,
+    queued_by_flow: Array.from(queuedByFlow.entries()).map(([jobType, counts]) => ({
+      job_type: jobType,
+      label: automationJobCatalog[jobType].label,
+      cadence: automationJobCatalog[jobType].cadence,
+      phase: automationJobCatalog[jobType].phase,
+      pending: counts.queued,
+      processing: counts.running,
+      failed: counts.failed,
+      skipped: counts.skipped,
+      description: automationJobCatalog[jobType].description,
+    })),
+    handlers: listAutomationRegistryEntries(),
     last_run: lastRunResult.data ?? null,
     last_error: lastErrorResult.data ?? null,
   }
@@ -419,4 +315,8 @@ export async function listAutomationErrors(query: ListAutomationErrorsInput) {
     items: data ?? [],
     total: count ?? 0,
   }
+}
+
+export async function listQueuedAutomationJobs(query: ListAutomationJobsInput) {
+  return listAutomationJobs(query)
 }

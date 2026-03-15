@@ -1,6 +1,6 @@
 import { Router } from 'express'
 
-import { postAutomationDispatch, postAutomationTick } from '../controllers/internalController.js'
+import { getAutomationInternalHealth, postAutomationDispatch, postAutomationTick } from '../controllers/internalController.js'
 import { requireInternalAutomationAuth } from '../middleware/internalAuth.js'
 
 export function createInternalRouter() {
@@ -8,6 +8,7 @@ export function createInternalRouter() {
 
   router.use(requireInternalAutomationAuth)
 
+  router.get('/automation/health', getAutomationInternalHealth)
   router.get('/automation/tick', postAutomationTick)
   router.post('/automation/tick', postAutomationTick)
   router.post('/automation/dispatch', postAutomationDispatch)

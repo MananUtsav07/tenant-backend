@@ -5,7 +5,13 @@ import { AppError, asyncHandler } from '../lib/errors.js'
 import { signAdminToken } from '../lib/jwt.js'
 import { createAuditLog } from '../services/auditLogService.js'
 import { getAdminAiStatusSummary } from '../services/ai/aiConfigService.js'
-import { getAutomationHealth, listAutomationErrors, listAutomationRuns } from '../services/automationEngineService.js'
+import { getAdminCashFlowOverview } from '../services/automation/cashFlowReportService.js'
+import { getAdminComplianceOverview } from '../services/complianceService.js'
+import { getAdminConditionReportOverview } from '../services/conditionReportService.js'
+import { getAutomationHealth, listAutomationErrors, listAutomationRuns, listQueuedAutomationJobs } from '../services/automationEngineService.js'
+import { getAdminPortfolioVisibilityOverview } from '../services/portfolioVisibilityService.js'
+import { createScreeningApplicant, getAdminScreeningOverview } from '../services/screeningWorkflowService.js'
+import { getAdminVacancyCampaignOverview } from '../services/vacancyWorkflowService.js'
 import {
   findAdminByEmail,
   getAdminOrganizationDetail,
@@ -36,9 +42,19 @@ import {
   adminOrganizationListQuerySchema,
 } from '../validations/adminSchemas.js'
 import { adminBlogListQuerySchema, createBlogPostSchema, updateBlogPostSchema } from '../validations/blogSchemas.js'
-import { adminAutomationErrorsQuerySchema, adminAutomationRunsQuerySchema } from '../validations/automationSchemas.js'
+import {
+  adminAutomationComplianceQuerySchema,
+  adminAutomationCashFlowQuerySchema,
+  adminAutomationErrorsQuerySchema,
+  adminAutomationJobsQuerySchema,
+  adminAutomationPortfolioVisibilityQuerySchema,
+  adminAutomationRunsQuerySchema,
+} from '../validations/automationSchemas.js'
+import { adminAutomationConditionReportsQuerySchema } from '../validations/conditionReportSchemas.js'
+import { adminCreateScreeningApplicantSchema, adminScreeningListQuerySchema } from '../validations/screeningSchemas.js'
 import { adminTelegramMaintenanceSchema } from '../validations/notificationSchemas.js'
 import { createTicketReplySchema, updateSupportTicketStatusSchema } from '../validations/ticketSchemas.js'
+import { adminAutomationVacancyCampaignQuerySchema } from '../validations/vacancyWorkflowSchemas.js'
 
 function requireAdminId(request: Request): string {
   const adminId = request.admin?.adminId
@@ -418,6 +434,22 @@ export const getAdminAutomationRuns = asyncHandler(async (request: Request, resp
   })
 })
 
+export const getAdminAutomationJobs = asyncHandler(async (request: Request, response: Response) => {
+  const parsed = adminAutomationJobsQuerySchema.parse(request.query)
+  const listed = await listQueuedAutomationJobs(parsed)
+
+  response.json({
+    ok: true,
+    items: listed.items,
+    pagination: paginationPayload(parsed.page, parsed.page_size, listed.total),
+    filters: {
+      job_type: parsed.job_type ?? null,
+      lifecycle_status: parsed.lifecycle_status ?? null,
+      organization_id: parsed.organization_id ?? null,
+    },
+  })
+})
+
 export const getAdminAutomationErrors = asyncHandler(async (request: Request, response: Response) => {
   const parsed = adminAutomationErrorsQuerySchema.parse(request.query)
   const listed = await listAutomationErrors(parsed)
@@ -430,6 +462,135 @@ export const getAdminAutomationErrors = asyncHandler(async (request: Request, re
       flow_name: parsed.flow_name ?? null,
       organization_id: parsed.organization_id ?? null,
     },
+  })
+})
+
+export const getAdminAutomationCompliance = asyncHandler(async (request: Request, response: Response) => {
+  const parsed = adminAutomationComplianceQuerySchema.parse(request.query)
+
+  const compliance = await getAdminComplianceOverview({
+    organizationId: parsed.organization_id,
+  })
+
+  response.json({
+    ok: true,
+    compliance,
+  })
+})
+
+export const getAdminAutomationPortfolioVisibility = asyncHandler(async (request: Request, response: Response) => {
+  const parsed = adminAutomationPortfolioVisibilityQuerySchema.parse(request.query)
+  const portfolioVisibility = await getAdminPortfolioVisibilityOverview({
+    organizationId: parsed.organization_id,
+  })
+
+  response.json({
+    ok: true,
+    portfolio_visibility: portfolioVisibility,
+  })
+})
+
+export const getAdminAutomationCashFlow = asyncHandler(async (request: Request, response: Response) => {
+  const parsed = adminAutomationCashFlowQuerySchema.parse(request.query)
+  const cashFlow = await getAdminCashFlowOverview({
+    organizationId: parsed.organization_id,
+  })
+
+  response.json({
+    ok: true,
+    cash_flow: cashFlow,
+  })
+})
+
+export const getAdminAutomationVacancyCampaigns = asyncHandler(async (request: Request, response: Response) => {
+  const parsed = adminAutomationVacancyCampaignQuerySchema.parse(request.query)
+  const vacancy = await getAdminVacancyCampaignOverview({
+    organizationId: parsed.organization_id,
+  })
+
+  response.json({
+    ok: true,
+    vacancy,
+  })
+})
+
+export const getAdminAutomationScreening = asyncHandler(async (request: Request, response: Response) => {
+  const parsed = adminScreeningListQuerySchema.parse(request.query)
+  const screening = await getAdminScreeningOverview({
+    organizationId: parsed.organization_id,
+    page: parsed.page,
+    pageSize: parsed.page_size,
+    recommendationCategory: parsed.recommendation_category,
+    finalDisposition: parsed.final_disposition,
+  })
+
+  response.json({
+    ok: true,
+    screening,
+  })
+})
+
+export const getAdminAutomationConditionReports = asyncHandler(async (request: Request, response: Response) => {
+  const parsed = adminAutomationConditionReportsQuerySchema.parse(request.query)
+  const condition_reports = await getAdminConditionReportOverview({
+    organizationId: parsed.organization_id,
+    page: parsed.page,
+    pageSize: parsed.page_size,
+    reportType: parsed.report_type,
+  })
+
+  response.json({
+    ok: true,
+    condition_reports,
+  })
+})
+
+export const postAdminScreeningApplicant = asyncHandler(async (request: Request, response: Response) => {
+  const adminId = requireAdminId(request)
+  const parsed = adminCreateScreeningApplicantSchema.parse(request.body ?? {})
+  const applicant = await createScreeningApplicant({
+    organizationId: parsed.organization_id,
+    ownerId: parsed.owner_id ?? undefined,
+    actorRole: 'admin',
+    actorAdminId: adminId,
+    payload: {
+      property_id: parsed.property_id,
+      vacancy_campaign_id: parsed.vacancy_campaign_id,
+      vacancy_application_id: parsed.vacancy_application_id,
+      enquiry_source: parsed.enquiry_source,
+      source_reference: parsed.source_reference,
+      applicant_name: parsed.applicant_name,
+      email: parsed.email,
+      phone: parsed.phone,
+      employer: parsed.employer,
+      monthly_salary: parsed.monthly_salary,
+      current_residence: parsed.current_residence,
+      reason_for_moving: parsed.reason_for_moving,
+      number_of_occupants: parsed.number_of_occupants,
+      desired_move_in_date: parsed.desired_move_in_date,
+      target_rent_amount: parsed.target_rent_amount,
+      identification_status: parsed.identification_status,
+      employment_verification_status: parsed.employment_verification_status,
+    },
+  })
+
+  await createAuditLog({
+    organization_id: parsed.organization_id,
+    actor_id: adminId,
+    actor_role: 'admin',
+    action: 'screening.applicant_created_admin',
+    entity_type: 'screening_applicant',
+    entity_id: applicant.id,
+    metadata: {
+      applicant_name: applicant.applicant_name,
+      owner_id: applicant.owner_id,
+      recommendation_category: applicant.recommendation_category,
+    },
+  })
+
+  response.status(201).json({
+    ok: true,
+    applicant,
   })
 })
 

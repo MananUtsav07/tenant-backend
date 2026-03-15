@@ -3,6 +3,7 @@ import {
   sendOwnerRentPaymentApprovalNotification,
   sendOwnerTicketReplyNotification,
   sendOwnerTicketNotification,
+  sendBrandedMessageEmail,
   sendTenantCredentialNotification,
   sendTenantPasswordChangeRecommendationEmail,
   sendTenantRentPaymentApprovedEmail,
@@ -47,6 +48,13 @@ function formatDateLabel(value: string): string {
   return Number.isNaN(date.getTime())
     ? value.slice(0, 10)
     : new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium' }).format(date)
+}
+
+function formatDateTimeLabel(value: string): string {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime())
+    ? value
+    : new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short' }).format(date)
 }
 
 function buildFrontendUrl(path: string): string {
@@ -668,6 +676,176 @@ export async function notifyTenantRentPaymentReviewed(input: {
     console.error('[notifyTenantRentPaymentReviewed] telegram failed', {
       tenantId: input.tenantId,
       status: input.status,
+      error,
+    })
+  }
+}
+
+export async function notifyTenantMaintenanceScheduled(input: {
+  tenantId: string
+  tenantEmail: string | null
+  tenantName: string
+  subject: string
+  propertyName: string | null
+  unitNumber: string | null
+  contractorName: string
+  appointmentStartAt: string
+  appointmentEndAt?: string | null
+  appointmentNotes?: string | null
+}) {
+  const tenantEmail = input.tenantEmail?.trim().toLowerCase()
+  if (!tenantEmail) {
+    console.warn('[notifyTenantMaintenanceScheduled] skipped: tenant email missing', {
+      tenantId: input.tenantId,
+      subject: input.subject,
+    })
+    return
+  }
+
+  try {
+    await sendBrandedMessageEmail({
+      to: tenantEmail,
+      subject: `Contractor Visit Scheduled: ${input.subject}`,
+      preheader: 'Your Prophives property team has scheduled a contractor visit.',
+      eyebrow: 'Maintenance Booking',
+      title: `Contractor visit confirmed for ${input.subject}`,
+      intro: ['A contractor booking has been arranged for your reported issue.'],
+      details: [
+        { label: 'Contractor', value: input.contractorName },
+        { label: 'Property', value: input.propertyName?.trim() || 'Property' },
+        { label: 'Unit', value: input.unitNumber?.trim() || '-' },
+        { label: 'Starts', value: formatDateTimeLabel(input.appointmentStartAt), emphasize: true },
+        { label: 'Ends', value: input.appointmentEndAt ? formatDateTimeLabel(input.appointmentEndAt) : 'TBC' },
+      ],
+      body: [
+        'Please make sure access is available for the scheduled time window.',
+        input.appointmentNotes?.trim() ? `Appointment notes: ${input.appointmentNotes.trim()}` : '',
+      ].filter(Boolean),
+      note: {
+        title: 'Need a change?',
+        body: 'If the appointment time no longer works, reply in your support ticket so the property team can reschedule it.',
+        tone: 'info',
+      },
+    })
+  } catch (error) {
+    console.error('[notifyTenantMaintenanceScheduled] email failed', {
+      tenantId: input.tenantId,
+      subject: input.subject,
+      error,
+    })
+  }
+}
+
+export async function notifyTenantMaintenanceCompleted(input: {
+  tenantId: string
+  tenantEmail: string | null
+  tenantName: string
+  subject: string
+  propertyName: string | null
+  unitNumber: string | null
+  contractorName: string
+  completionNotes?: string | null
+}) {
+  const tenantEmail = input.tenantEmail?.trim().toLowerCase()
+  if (!tenantEmail) {
+    console.warn('[notifyTenantMaintenanceCompleted] skipped: tenant email missing', {
+      tenantId: input.tenantId,
+      subject: input.subject,
+    })
+    return
+  }
+
+  try {
+    await sendBrandedMessageEmail({
+      to: tenantEmail,
+      subject: `Please Confirm Maintenance Completion: ${input.subject}`,
+      preheader: 'Your Prophives property team marked a contractor job as completed.',
+      eyebrow: 'Maintenance Confirmation',
+      title: `Please confirm the work on ${input.subject}`,
+      intro: [`The property team has marked this job as completed by ${input.contractorName}.`],
+      details: [
+        { label: 'Contractor', value: input.contractorName },
+        { label: 'Property', value: input.propertyName?.trim() || 'Property' },
+        { label: 'Unit', value: input.unitNumber?.trim() || '-' },
+      ],
+      body: [
+        input.completionNotes?.trim() ? `Completion notes: ${input.completionNotes.trim()}` : '',
+        'Open the ticket in your tenant dashboard to confirm whether the issue is fully resolved or still needs follow-up.',
+      ].filter(Boolean),
+      note: {
+        title: 'Why this matters',
+        body: 'Your confirmation helps keep the maintenance record accurate and lets the property team know whether more work is needed.',
+        tone: 'info',
+      },
+    })
+  } catch (error) {
+    console.error('[notifyTenantMaintenanceCompleted] email failed', {
+      tenantId: input.tenantId,
+      subject: input.subject,
+      error,
+    })
+  }
+}
+
+export async function notifyOwnerMaintenanceResolution(input: {
+  organizationId: string
+  ownerId: string
+  tenantId: string
+  tenantName: string
+  tenantAccessId: string
+  propertyName: string | null
+  unitNumber: string | null
+  subject: string
+  resolved: boolean
+  feedbackNote?: string | null
+}) {
+  const owner = await getOwnerById(input.ownerId, input.organizationId)
+  if (!owner) {
+    throw new AppError('Owner not found for maintenance resolution notification', 404)
+  }
+
+  const title = input.resolved
+    ? `Tenant confirmed completion: ${input.subject}`
+    : `Maintenance follow-up requested: ${input.subject}`
+  const message = input.resolved
+    ? `${input.tenantName} confirmed the maintenance work is complete.`
+    : `${input.tenantName} reported that the issue is still unresolved.`
+
+  await createOwnerNotification({
+    organization_id: input.organizationId,
+    owner_id: input.ownerId,
+    tenant_id: input.tenantId,
+    notification_type: input.resolved ? 'maintenance_confirmed' : 'maintenance_follow_up_required',
+    title,
+    message,
+  })
+
+  const toEmail = listUniqueRecipientEmails(owner).join(', ')
+  try {
+    await sendBrandedMessageEmail({
+      to: toEmail,
+      subject: title,
+      preheader: 'A tenant responded to a maintenance completion request.',
+      eyebrow: 'Maintenance Resolution',
+      title,
+      intro: [message],
+      details: [
+        { label: 'Tenant', value: `${input.tenantName} (${input.tenantAccessId})` },
+        { label: 'Property', value: input.propertyName?.trim() || 'Property' },
+        { label: 'Unit', value: input.unitNumber?.trim() || '-' },
+      ],
+      body: [
+        input.feedbackNote?.trim() ? `Tenant note: ${input.feedbackNote.trim()}` : '',
+        input.resolved
+          ? 'You can close the ticket or leave it in a resolved state from the owner dashboard.'
+          : 'Review the ticket, update the contractor booking, and arrange a follow-up visit if required.',
+      ].filter(Boolean),
+    })
+  } catch (error) {
+    console.error('[notifyOwnerMaintenanceResolution] email failed', {
+      ownerId: input.ownerId,
+      tenantId: input.tenantId,
+      subject: input.subject,
       error,
     })
   }

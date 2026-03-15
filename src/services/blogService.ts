@@ -84,7 +84,7 @@ export async function createBlogPost(input: {
       content: input.content,
       excerpt: input.excerpt,
       cover_image: input.cover_image ?? null,
-      author: input.author ?? 'TenantFlow Team',
+      author: input.author ?? 'Prophives Team',
       published: input.published ?? false,
     })
     .select(blogSelectFields)

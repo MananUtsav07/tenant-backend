@@ -2,6 +2,7 @@ import type { PostgrestError } from '@supabase/supabase-js'
 
 import { AppError } from '../lib/errors.js'
 import { supabaseAdmin } from '../lib/supabase.js'
+import { notifyOwnerRentOverdueAlert } from './portfolioVisibilityService.js'
 import { processOwnerReminders } from './reminderService.js'
 
 type ActiveTenantRow = {
@@ -9,10 +10,18 @@ type ActiveTenantRow = {
   organization_id: string
   owner_id: string
   property_id: string
+  full_name: string
+  tenant_access_id: string
   monthly_rent: number
   payment_due_day: number
   payment_status: 'pending' | 'paid' | 'overdue' | 'partial'
   status: string
+  properties?:
+    | {
+        property_name: string | null
+        unit_number: string | null
+      }
+    | null
 }
 
 function throwIfError(error: PostgrestError | null, message: string): void {
@@ -54,6 +63,30 @@ async function loadRentChasingSettings(ownerIds: string[]) {
   return map
 }
 
+async function loadOwnerCurrencyMap(ownerIds: string[]) {
+  if (ownerIds.length === 0) {
+    return new Map<string, string>()
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from('owners')
+    .select('id, organizations(currency_code)')
+    .in('id', ownerIds)
+
+  throwIfError(error, 'Failed to load owner currency settings')
+
+  const map = new Map<string, string>()
+  for (const row of data ?? []) {
+    const organizationsValue = (row as { organizations?: unknown }).organizations
+    const organization = Array.isArray(organizationsValue)
+      ? (organizationsValue[0] as { currency_code?: string | null } | undefined)
+      : ((organizationsValue as { currency_code?: string | null } | null | undefined) ?? null)
+    map.set((row as { id: string }).id, organization?.currency_code?.trim().toUpperCase() || 'INR')
+  }
+
+  return map
+}
+
 async function loadApprovedTenantIds(input: {
   organizationIds: string[]
   tenantIds: string[]
@@ -83,12 +116,39 @@ export async function runRentChasing(now = new Date()) {
 
   const { data, error } = await supabaseAdmin
     .from('tenants')
-    .select('id, organization_id, owner_id, property_id, monthly_rent, payment_due_day, payment_status, status')
+    .select(
+      'id, organization_id, owner_id, property_id, full_name, tenant_access_id, monthly_rent, payment_due_day, payment_status, status, properties(property_name, unit_number)',
+    )
     .eq('status', 'active')
 
   throwIfError(error, 'Failed to load active tenants for rent chasing')
 
-  const tenants = (data ?? []) as ActiveTenantRow[]
+  const tenants = ((data ?? []) as Array<Record<string, unknown>>).map((row) => {
+    const propertiesValue = row.properties
+    const property =
+      Array.isArray(propertiesValue) && propertiesValue.length > 0
+        ? ((propertiesValue[0] as { property_name?: string | null; unit_number?: string | null }) ?? null)
+        : ((propertiesValue as { property_name?: string | null; unit_number?: string | null } | null | undefined) ?? null)
+
+    return {
+      id: String(row.id),
+      organization_id: String(row.organization_id),
+      owner_id: String(row.owner_id),
+      property_id: String(row.property_id),
+      full_name: String(row.full_name),
+      tenant_access_id: String(row.tenant_access_id),
+      monthly_rent: Number(row.monthly_rent ?? 0),
+      payment_due_day: Number(row.payment_due_day ?? 1),
+      payment_status: row.payment_status as ActiveTenantRow['payment_status'],
+      status: String(row.status),
+      properties: property
+        ? {
+            property_name: property.property_name ?? null,
+            unit_number: property.unit_number ?? null,
+          }
+        : null,
+    } satisfies ActiveTenantRow
+  })
   const approvedTenantIds = await loadApprovedTenantIds({
     organizationIds: Array.from(new Set(tenants.map((tenant) => tenant.organization_id))),
     tenantIds: tenants.map((tenant) => tenant.id),
@@ -96,7 +156,11 @@ export async function runRentChasing(now = new Date()) {
     cycleMonth,
   })
 
-  const settingsByOwner = await loadRentChasingSettings(Array.from(new Set(tenants.map((tenant) => tenant.owner_id))))
+  const ownerIds = Array.from(new Set(tenants.map((tenant) => tenant.owner_id)))
+  const [settingsByOwner, ownerCurrencyById] = await Promise.all([
+    loadRentChasingSettings(ownerIds),
+    loadOwnerCurrencyMap(ownerIds),
+  ])
 
   let paidCount = 0
   let pendingCount = 0
@@ -149,6 +213,22 @@ export async function runRentChasing(now = new Date()) {
 
       throwIfError(updateError, 'Failed to update tenant payment status')
       tenantStatusUpdates += 1
+    }
+
+    if (tenant.payment_status !== 'overdue' && nextStatus === 'overdue') {
+      await notifyOwnerRentOverdueAlert({
+        organizationId: tenant.organization_id,
+        ownerId: tenant.owner_id,
+        tenantId: tenant.id,
+        tenantName: tenant.full_name,
+        tenantAccessId: tenant.tenant_access_id,
+        propertyName: tenant.properties?.property_name ?? null,
+        unitNumber: tenant.properties?.unit_number ?? null,
+        dueDateIso,
+        amountDue,
+        currencyCode: ownerCurrencyById.get(tenant.owner_id) ?? 'INR',
+        now,
+      })
     }
   }
 

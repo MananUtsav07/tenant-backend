@@ -5,26 +5,62 @@ import {
   createOwnerTenant,
   getOwnerNotificationList,
   getOwnerNotificationPreferencesController,
+  getOwnerContractorDirectoryController,
   getOwnerAutomationActivityController,
+  getOwnerAutomationCashFlowController,
+  getOwnerAutomationComplianceController,
+  getOwnerAutomationPortfolioVisibilityController,
+  getOwnerAutomationVacancyController,
   getOwnerAutomationSettingsController,
   getOwnerRentPaymentApprovals,
   getOwnerProperties,
+  getOwnerConditionReportDetailController,
   getOwnerSummary,
   getOwnerTelegramDeliveryLogsController,
+  getOwnerScreeningApplicantDetailController,
+  getOwnerScreeningOverviewController,
   getOwnerTelegramOnboarding,
   getOwnerTenantById,
+  getOwnerTenantConditionReportsController,
   getOwnerTicketById,
+  getOwnerTicketMaintenanceWorkflowController,
   getOwnerTenants,
   getOwnerTicketList,
+  getOwnerVacancyCampaignDetailController,
+  getOwnerVacancyCampaignListController,
   markAllOwnerNotificationsRead,
   markOwnerNotificationRead,
   patchOwnerProperty,
+  patchOwnerConditionReportRoomController,
   patchOwnerRentPaymentApproval,
+  patchOwnerContractorDirectoryController,
+  patchOwnerVacancyCampaignDraftController,
+  patchOwnerScreeningApplicantController,
+  patchOwnerScreeningApplicantDecisionController,
+  patchOwnerTicketMaintenanceAssignmentController,
   patchOwnerTenant,
   patchOwnerTicket,
+  postOwnerContractorDirectoryController,
+  postOwnerTicketMaintenanceQuoteApprovalController,
+  postOwnerTicketMaintenanceQuoteController,
+  postOwnerTicketMaintenanceQuoteRequestsController,
+  postOwnerTicketMaintenanceTriageController,
+  postOwnerPropertyVacancyCampaignController,
+  postOwnerAutomationMaintenanceCostController,
+  postOwnerConditionReportConfirmController,
+  postOwnerConditionReportMediaController,
+  postOwnerScreeningApplicantController,
+  postOwnerScreeningApplicantDocumentController,
+  postOwnerScreeningApplicantRefreshController,
+  postOwnerVacancyCampaignApplicationController,
+  postOwnerVacancyCampaignApproveController,
+  postOwnerVacancyCampaignLeadController,
+  postOwnerVacancyCampaignViewingController,
   postOwnerTicketReply,
+  postOwnerAutomationCashFlowGenerateController,
   postOwnerTelegramDisconnect,
   putOwnerNotificationPreferencesController,
+  postOwnerTenantConditionReportController,
   processReminders,
   putOwnerAutomationSettingsController,
   removeOwnerProperty,
@@ -41,17 +77,35 @@ export function createOwnerRouter() {
   router.get('/properties', getOwnerProperties)
   router.patch('/properties/:id', patchOwnerProperty)
   router.delete('/properties/:id', removeOwnerProperty)
+  router.post('/properties/:id/vacancy-campaigns', postOwnerPropertyVacancyCampaignController)
 
   router.post('/tenants', createOwnerTenant)
   router.get('/tenants', getOwnerTenants)
   router.get('/tenants/:id', getOwnerTenantById)
+  router.get('/tenants/:id/condition-reports', getOwnerTenantConditionReportsController)
+  router.post('/tenants/:id/condition-reports', postOwnerTenantConditionReportController)
   router.patch('/tenants/:id', patchOwnerTenant)
   router.delete('/tenants/:id', removeOwnerTenant)
+
+  router.get('/condition-reports/:reportId', getOwnerConditionReportDetailController)
+  router.patch('/condition-reports/:reportId/rooms/:roomEntryId', patchOwnerConditionReportRoomController)
+  router.post('/condition-reports/:reportId/media', postOwnerConditionReportMediaController)
+  router.post('/condition-reports/:reportId/confirm', postOwnerConditionReportConfirmController)
 
   router.get('/tickets', getOwnerTicketList)
   router.get('/tickets/:id', getOwnerTicketById)
   router.post('/tickets/:id/replies', postOwnerTicketReply)
   router.patch('/tickets/:id', patchOwnerTicket)
+  router.get('/tickets/:id/maintenance-workflow', getOwnerTicketMaintenanceWorkflowController)
+  router.post('/tickets/:id/maintenance-workflow/triage', postOwnerTicketMaintenanceTriageController)
+  router.post('/tickets/:id/maintenance-workflow/request-quotes', postOwnerTicketMaintenanceQuoteRequestsController)
+  router.post('/tickets/:id/maintenance-workflow/quotes', postOwnerTicketMaintenanceQuoteController)
+  router.post('/tickets/:id/maintenance-workflow/quotes/:quoteId/approve', postOwnerTicketMaintenanceQuoteApprovalController)
+  router.patch('/tickets/:id/maintenance-workflow/assignment', patchOwnerTicketMaintenanceAssignmentController)
+
+  router.get('/contractors', getOwnerContractorDirectoryController)
+  router.post('/contractors', postOwnerContractorDirectoryController)
+  router.patch('/contractors/:contractorId', patchOwnerContractorDirectoryController)
 
   router.get('/notifications', getOwnerNotificationList)
   router.get('/notifications/preferences', getOwnerNotificationPreferencesController)
@@ -69,6 +123,26 @@ export function createOwnerRouter() {
   router.get('/automation/settings', getOwnerAutomationSettingsController)
   router.put('/automation/settings', putOwnerAutomationSettingsController)
   router.get('/automation/activity', getOwnerAutomationActivityController)
+  router.get('/automation/compliance', getOwnerAutomationComplianceController)
+  router.get('/automation/portfolio-visibility', getOwnerAutomationPortfolioVisibilityController)
+  router.get('/automation/cash-flow', getOwnerAutomationCashFlowController)
+  router.get('/automation/vacancy', getOwnerAutomationVacancyController)
+  router.post('/automation/cash-flow/generate', postOwnerAutomationCashFlowGenerateController)
+  router.post('/automation/cash-flow/maintenance-costs', postOwnerAutomationMaintenanceCostController)
+  router.get('/screening/applicants', getOwnerScreeningOverviewController)
+  router.post('/screening/applicants', postOwnerScreeningApplicantController)
+  router.get('/screening/applicants/:applicantId', getOwnerScreeningApplicantDetailController)
+  router.patch('/screening/applicants/:applicantId', patchOwnerScreeningApplicantController)
+  router.post('/screening/applicants/:applicantId/documents', postOwnerScreeningApplicantDocumentController)
+  router.patch('/screening/applicants/:applicantId/decision', patchOwnerScreeningApplicantDecisionController)
+  router.post('/screening/applicants/:applicantId/refresh', postOwnerScreeningApplicantRefreshController)
+  router.get('/vacancy-campaigns', getOwnerVacancyCampaignListController)
+  router.get('/vacancy-campaigns/:campaignId', getOwnerVacancyCampaignDetailController)
+  router.patch('/vacancy-campaigns/:campaignId/draft', patchOwnerVacancyCampaignDraftController)
+  router.post('/vacancy-campaigns/:campaignId/approve', postOwnerVacancyCampaignApproveController)
+  router.post('/vacancy-campaigns/:campaignId/leads', postOwnerVacancyCampaignLeadController)
+  router.post('/vacancy-campaigns/:campaignId/viewings', postOwnerVacancyCampaignViewingController)
+  router.post('/vacancy-campaigns/:campaignId/applications', postOwnerVacancyCampaignApplicationController)
 
   return router
 }

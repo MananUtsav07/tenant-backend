@@ -10,10 +10,13 @@ export type OwnerAutomationSettings = {
   compliance_alerts_enabled: boolean
   rent_chasing_enabled: boolean
   portfolio_visibility_enabled: boolean
+  cash_flow_reporting_enabled: boolean
   daily_digest_enabled: boolean
   weekly_digest_enabled: boolean
   monthly_digest_enabled: boolean
   status_command_enabled: boolean
+  yield_alert_threshold_percent: number | null
+  yield_alert_cooldown_days: number
   quiet_hours_start: string | null
   quiet_hours_end: string | null
   created_at: string
@@ -36,10 +39,13 @@ function defaultSettings(ownerId: string, organizationId: string): OwnerAutomati
     compliance_alerts_enabled: true,
     rent_chasing_enabled: true,
     portfolio_visibility_enabled: true,
+    cash_flow_reporting_enabled: true,
     daily_digest_enabled: true,
     weekly_digest_enabled: false,
     monthly_digest_enabled: false,
     status_command_enabled: true,
+    yield_alert_threshold_percent: null,
+    yield_alert_cooldown_days: 7,
     quiet_hours_start: null,
     quiet_hours_end: null,
     created_at: now,
@@ -73,10 +79,13 @@ export async function updateOwnerAutomationSettings(
       | 'compliance_alerts_enabled'
       | 'rent_chasing_enabled'
       | 'portfolio_visibility_enabled'
+      | 'cash_flow_reporting_enabled'
       | 'daily_digest_enabled'
       | 'weekly_digest_enabled'
       | 'monthly_digest_enabled'
       | 'status_command_enabled'
+      | 'yield_alert_threshold_percent'
+      | 'yield_alert_cooldown_days'
       | 'quiet_hours_start'
       | 'quiet_hours_end'
     >
