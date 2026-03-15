@@ -45,7 +45,6 @@ type TicketStatus = 'open' | 'in_progress' | 'resolved' | 'closed'
 type CallbackAction =
   | { kind: 'ticket_status'; ticketId: string; status: TicketStatus }
   | { kind: 'rent_approval'; approvalId: string; action: 'approve' | 'reject' }
-  | { kind: 'prompt_close_note'; ticketId: string }
   | { kind: 'prompt_rent_message'; approvalId: string; action: 'approve' | 'reject' }
   | { kind: 'menu'; action: 'stats' | 'open_tickets' | 'tenants' | 'approvals' | 'help' | 'refresh' }
 
@@ -118,23 +117,6 @@ function parseReplyCommand(text: string | undefined): { ticketId: string; messag
   }
 }
 
-function parseCloseCommand(text: string | undefined): { ticketId: string; note: string } | null {
-  if (typeof text !== 'string') {
-    return null
-  }
-
-  const trimmed = text.trim()
-  const matched = trimmed.match(/^\/close(?:@[a-z0-9_]+)?\s+([a-f0-9-]{36})\s+([\s\S]{1,2000})$/i)
-  if (!matched) {
-    return null
-  }
-
-  return {
-    ticketId: matched[1],
-    note: matched[2].trim(),
-  }
-}
-
 function parseRentReviewCommand(
   text: string | undefined,
 ): { action: 'approve' | 'reject'; approvalId: string; message: string | null } | null {
@@ -178,14 +160,6 @@ function parseCallbackData(data: string | undefined): CallbackAction | null {
     }
   }
 
-  const closePromptMatched = data.match(/^cn\|([a-f0-9-]{36})$/i)
-  if (closePromptMatched) {
-    return {
-      kind: 'prompt_close_note',
-      ticketId: closePromptMatched[1],
-    }
-  }
-
   const rentPromptMatched = data.match(/^rm\|(approve|reject)\|([a-f0-9-]{36})$/i)
   if (rentPromptMatched) {
     return {
@@ -223,14 +197,14 @@ function ownerMainMenuReplyMarkup() {
   return {
     inline_keyboard: [
       [
-        { text: 'View Stats', callback_data: 'mn|stats' },
-        { text: 'Open Tickets', callback_data: 'mn|open_tickets' },
+        { text: '📊 View Stats', callback_data: 'mn|stats' },
+        { text: '🎫 Open Tickets', callback_data: 'mn|open_tickets' },
       ],
       [
-        { text: 'View Tenants', callback_data: 'mn|tenants' },
-        { text: 'Pending Approvals', callback_data: 'mn|approvals' },
+        { text: '👥 View Tenants', callback_data: 'mn|tenants' },
+        { text: '💸 Pending Approvals', callback_data: 'mn|approvals' },
       ],
-      [{ text: 'Refresh Menu', callback_data: 'mn|refresh' }, { text: 'Help', callback_data: 'mn|help' }],
+      [{ text: '🔄 Refresh Menu', callback_data: 'mn|refresh' }, { text: '❓ Help', callback_data: 'mn|help' }],
     ],
   }
 }
@@ -239,12 +213,11 @@ async function sendOwnerMainMenu(input: { chatId: string; organizationId: string
   await sendTelegramMessageWithRetry({
     chatId: input.chatId,
     text: [
-      'Owner Control Panel',
-      'Use the buttons below to quickly view your data.',
+      '🏢 Owner Control Panel',
+      'Use the buttons below to quickly view your portfolio and support activity.',
       '',
-      'Quick commands:',
+      '⚡ Quick commands',
       '/reply <ticket-id> <message>',
-      '/close <ticket-id> <closing-note>',
       '/approve <approval-id> [message]',
       '/reject <approval-id> <reason>',
     ].join('\n'),
@@ -279,7 +252,7 @@ async function sendOwnerOpenTicketsSnapshot(input: { chatId: string; organizatio
 
   await sendTelegramMessageWithRetry({
     chatId: input.chatId,
-    text: lines.length > 0 ? ['Open Tickets (latest 5)', ...lines].join('\n') : 'Open Tickets: none right now.',
+    text: lines.length > 0 ? ['🎫 Open Tickets (latest 5)', ...lines].join('\n') : '✅ Open Tickets: none right now.',
     logContext: {
       organizationId: input.organizationId,
       ownerId: input.ownerId,
@@ -308,7 +281,7 @@ async function sendOwnerTenantsSnapshot(input: { chatId: string; organizationId:
 
   await sendTelegramMessageWithRetry({
     chatId: input.chatId,
-    text: lines.length > 0 ? ['Tenants (latest 8)', ...lines].join('\n') : 'Tenants: none found.',
+    text: lines.length > 0 ? ['👥 Tenants (latest 8)', ...lines].join('\n') : 'ℹ️ Tenants: none found.',
     logContext: {
       organizationId: input.organizationId,
       ownerId: input.ownerId,
@@ -341,10 +314,10 @@ async function sendOwnerPendingApprovalsSnapshot(input: { chatId: string; organi
     chatId: input.chatId,
     text:
       lines.length > 0
-        ? ['Pending Rent Approvals (latest 5)', ...lines, 'Use /approve <id> [message] or /reject <id> <reason>'].join(
+        ? ['💸 Pending Rent Approvals (latest 5)', ...lines, 'Use /approve <id> [message] or /reject <id> <reason>'].join(
             '\n',
           )
-        : 'Pending Rent Approvals: none right now.',
+        : '✅ Pending Rent Approvals: none right now.',
     logContext: {
       organizationId: input.organizationId,
       ownerId: input.ownerId,
@@ -471,14 +444,14 @@ async function processOwnerStatsCommand(payload: TelegramWebhookUpdate['message'
   await sendTelegramMessageWithRetry({
     chatId: String(chatId),
     text: [
-      'Owner quick stats',
-      `Active tenants: ${activeTenantsResult.count ?? 0}`,
-      `Total tickets: ${totalTicketsResult.count ?? 0}`,
-      `Open tickets: ${openTicketsResult.count ?? 0}`,
-      `Closed tickets: ${closedTicketsResult.count ?? 0}`,
-      `Pending rent approvals: ${pendingApprovalsResult.count ?? 0}`,
+      '📊 Owner Quick Stats',
+      `👥 Active tenants: ${activeTenantsResult.count ?? 0}`,
+      `🎫 Total tickets: ${totalTicketsResult.count ?? 0}`,
+      `🟠 Open tickets: ${openTicketsResult.count ?? 0}`,
+      `✅ Closed tickets: ${closedTicketsResult.count ?? 0}`,
+      `💸 Pending rent approvals: ${pendingApprovalsResult.count ?? 0}`,
       '',
-      'Commands:',
+      '⚡ Commands',
       '/ownerstats',
       '/reply <ticket-id> <message>',
       '/disconnect',
@@ -544,7 +517,7 @@ async function processOwnerReplyCommand(payload: TelegramWebhookUpdate['message'
 
   await sendTelegramMessageWithRetry({
     chatId: String(chatId),
-    text: `Reply sent to tenant for ticket #${result.ticket.id.slice(0, 8)}.`,
+    text: `✅ Reply sent to tenant for ticket #${result.ticket.id.slice(0, 8)}.`,
     logContext: {
       organizationId: ownerLink.organization_id,
       ownerId: ownerLink.owner_id ?? undefined,
@@ -567,91 +540,20 @@ async function processHelpCommand(payload: TelegramWebhookUpdate['message']) {
   await sendTelegramMessageWithRetry({
     chatId: String(chatId),
     text: [
-      'Prophives Telegram bot commands',
+      '🤖 Prophives Bot Commands',
       '/ownerstats - View owner dashboard snapshot',
       '/reply <ticket-id> <message> - Reply to a ticket',
-      '/close <ticket-id> <closing-note> - Close ticket with note',
       '/approve <approval-id> [message] - Approve rent payment',
       '/reject <approval-id> <reason> - Reject rent payment',
       '/disconnect - Stop Telegram alerts',
       '',
-      'Tip: You can also use inline buttons in alerts to update ticket status and rent approvals.',
+      '💡 Tip: You can also use inline buttons in alerts to update ticket status and rent approvals.',
     ].join('\n'),
     logContext: {
       userRole: 'system',
       eventType: 'telegram_help_command',
     },
   })
-}
-
-async function processOwnerCloseWithNoteCommand(payload: TelegramWebhookUpdate['message']) {
-  const chatId = payload?.chat?.id
-  const userId = payload?.from?.id
-  const closeInput = parseCloseCommand(payload?.text)
-  if (chatId === undefined || userId === undefined || !closeInput) {
-    return false
-  }
-
-  const ownerLink = await resolveOwnerLinkFromTelegramIdentity({
-    chatId: String(chatId),
-    telegramUserId: String(userId),
-  })
-
-  const ticket = await updateTicketStatusAsOwner({
-    ticketId: closeInput.ticketId,
-    ownerId: ownerLink.owner_id!,
-    organizationId: ownerLink.organization_id,
-    status: 'closed',
-    closingMessage: closeInput.note,
-  })
-
-  if (!ticket) {
-    throw new AppError('Ticket not found for your account.', 404)
-  }
-
-  const tenant = ticket.tenants as
-    | {
-        full_name?: string | null
-        email?: string | null
-      }
-    | null
-  const owner = ticket.owners as
-    | {
-        full_name?: string | null
-        company_name?: string | null
-        email?: string | null
-      }
-    | null
-  const senderName = owner?.full_name?.trim() || owner?.company_name?.trim() || owner?.email?.trim() || 'Owner'
-
-  await notifyTenantTicketClosed({
-    organizationId: ticket.organization_id,
-    ownerId: ticket.owner_id,
-    tenantId: ticket.tenant_id,
-    tenantEmail: tenant?.email ?? null,
-    tenantName: tenant?.full_name ?? 'Tenant',
-    subject: ticket.subject,
-    senderName,
-    senderRoleLabel: 'Owner',
-    propertyName: null,
-    unitNumber: null,
-    closingMessage: closeInput.note,
-  })
-
-  await sendTelegramMessageWithRetry({
-    chatId: String(chatId),
-    text: `Ticket #${ticket.id.slice(0, 8)} closed with note.`,
-    logContext: {
-      organizationId: ownerLink.organization_id,
-      ownerId: ownerLink.owner_id ?? undefined,
-      tenantId: ticket.tenant_id,
-      userRole: 'owner',
-      eventType: 'owner_ticket_close_with_note_command',
-      metadata: { ticket_id: ticket.id },
-    },
-  })
-
-  return true
 }
 
 async function processOwnerRentReviewCommand(payload: TelegramWebhookUpdate['message']) {
@@ -680,8 +582,8 @@ async function processOwnerRentReviewCommand(payload: TelegramWebhookUpdate['mes
     chatId: String(chatId),
     text:
       reviewInput.action === 'approve'
-        ? `Approval ${reviewInput.approvalId.slice(0, 8)} approved${reviewInput.message ? ' with message.' : '.'}`
-        : `Approval ${reviewInput.approvalId.slice(0, 8)} rejected with reason.`,
+        ? `✅ Approval ${reviewInput.approvalId.slice(0, 8)} approved${reviewInput.message ? ' with message.' : '.'}`
+        : `⚠️ Approval ${reviewInput.approvalId.slice(0, 8)} rejected with reason.`,
     logContext: {
       organizationId: ownerLink.organization_id,
       ownerId: ownerLink.owner_id ?? undefined,
@@ -710,8 +612,8 @@ async function processDisconnectCommand(payload: TelegramWebhookUpdate['message'
     chatId: String(chatId),
     text:
       disconnectedCount > 0
-        ? 'Telegram alerts disconnected for this account. You can reconnect anytime from the app.'
-        : 'No active Telegram link found for this chat.',
+        ? '🔕 Telegram alerts disconnected for this account. You can reconnect anytime from the app.'
+        : 'ℹ️ No active Telegram link found for this chat.',
     logContext: {
       userRole: 'system',
       eventType: 'telegram_disconnect_command',
@@ -815,7 +717,7 @@ async function processTicketStatusCallback(callback: NonNullable<TelegramWebhook
       })
       await answerTelegramCallbackQuery({
         callbackQueryId: callbackId,
-        text: 'Updated.',
+        text: '✅ Updated.',
       })
       return
     }
@@ -835,43 +737,20 @@ async function processTicketStatusCallback(callback: NonNullable<TelegramWebhook
       return
     }
 
-    if (action.kind === 'prompt_close_note') {
-      await answerTelegramCallbackQuery({
-        callbackQueryId: callbackId,
-        text: 'Send closing note using /close command.',
-      })
-      await sendTelegramMessageWithRetry({
-        chatId: String(chatId),
-        text: `To close with note, send:\n/close ${action.ticketId} <closing note>`,
-        replyMarkup: {
-          force_reply: true,
-          input_field_placeholder: `/close ${action.ticketId} Issue resolved after plumbing visit`,
-        },
-        logContext: {
-          organizationId: ownerLink.organization_id,
-          ownerId: ownerLink.owner_id ?? undefined,
-          userRole: 'owner',
-          eventType: 'telegram_prompt_close_note',
-          metadata: { ticket_id: action.ticketId },
-        },
-      })
-      return
-    }
-
     if (action.kind !== 'prompt_rent_message') {
       throw new AppError('Unsupported callback action.', 400)
     }
 
     await answerTelegramCallbackQuery({
       callbackQueryId: callbackId,
-      text: action.action === 'approve' ? 'Send approve message now.' : 'Send reject reason now.',
+        text: action.action === 'approve' ? 'Send approve message now.' : 'Send reject reason now.',
     })
     await sendTelegramMessageWithRetry({
       chatId: String(chatId),
       text:
         action.action === 'approve'
-          ? `To approve with message, send:\n/approve ${action.approvalId} <message>`
-          : `To reject with reason, send:\n/reject ${action.approvalId} <reason>`,
+          ? `✍️ To approve with message, send:\n/approve ${action.approvalId} <message>`
+          : `✍️ To reject with reason, send:\n/reject ${action.approvalId} <reason>`,
       replyMarkup: {
         force_reply: true,
         input_field_placeholder:
@@ -980,34 +859,6 @@ export const postTelegramWebhook = asyncHandler(async (request: Request, respons
     return
   }
 
-  if (parseCloseCommand(text)) {
-    try {
-      await processOwnerCloseWithNoteCommand(payload.message)
-      response.json({ ok: true, closed_with_note: true })
-    } catch (error) {
-      console.error('[telegram-owner-close-note-command-failed]', {
-        requestId: request.requestId,
-        error,
-      })
-      const chatIdForError = payload.message?.chat?.id
-      if (chatIdForError !== undefined) {
-        await sendTelegramMessageWithRetry({
-          chatId: String(chatIdForError),
-          text:
-            error instanceof AppError
-              ? error.message
-              : 'Could not close ticket. Use /close <ticket-id> <closing note>.',
-          logContext: {
-            userRole: 'system',
-            eventType: 'telegram_close_note_command_failed',
-          },
-        })
-      }
-      response.json({ ok: true, closed_with_note: false })
-    }
-    return
-  }
-
   if (parseRentReviewCommand(text)) {
     try {
       await processOwnerRentReviewCommand(payload.message)
@@ -1100,7 +951,7 @@ export const postTelegramWebhook = asyncHandler(async (request: Request, respons
     } else {
       await sendTelegramMessageWithRetry({
         chatId: String(chatId),
-        text: 'Telegram connected successfully. You will now receive alerts for your linked account.',
+        text: '✅ Telegram connected successfully. You will now receive alerts for your linked account.',
         logContext: {
           organizationId: linked.organization_id,
           tenantId: linked.tenant_id ?? undefined,

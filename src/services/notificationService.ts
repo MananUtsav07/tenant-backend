@@ -87,18 +87,18 @@ function formatTicketTelegramMessage(input: {
   const ownerTicketsUrl = buildFrontendUrl('/owner/notifications')
 
   return [
-    'Support Ticket: New',
-    `Ticket: #${input.ticketId.slice(0, 8)} (${input.ticketId})`,
-    `Tenant: ${input.tenantName} (${input.tenantAccessId})`,
-    `Property: ${propertyLabel}`,
-    `Subject: ${input.subject}`,
-    `Preview: ${messagePreview}`,
+    '🚨 New Support Ticket',
+    `🎫 Ticket: #${input.ticketId.slice(0, 8)} (${input.ticketId})`,
+    `👤 Tenant: ${input.tenantName} (${input.tenantAccessId})`,
+    `🏠 Property: ${propertyLabel}`,
+    `📝 Subject: ${input.subject}`,
+    `💬 Preview: ${messagePreview}`,
     '',
-    'Quick actions:',
-    '- Use buttons below to update status',
-    '- Reply from chat:',
+    '⚡ Quick actions',
+    '• Use buttons below to update status',
+    '• Reply from chat:',
     `/reply ${input.ticketId} <your message>`,
-    `Dashboard: ${ownerTicketsUrl}`,
+    `🔗 Dashboard: ${ownerTicketsUrl}`,
   ].join('\n')
 }
 
@@ -173,7 +173,6 @@ export async function notifyOwnerTicketCreated(input: {
                 { text: 'Mark Resolved', callback_data: `ts|${input.ticketId}|resolved` },
               ],
               [{ text: 'Mark Closed', callback_data: `ts|${input.ticketId}|closed` }],
-              [{ text: 'Close With Note', callback_data: `cn|${input.ticketId}` }],
             ],
           },
           logContext: {
@@ -250,16 +249,16 @@ export async function notifyOwnerTicketReply(input: {
         await sendTelegramMessageWithRetry({
           chatId: telegramLink.chat_id,
           text: [
-            'Support Ticket: New Reply',
-            `Ticket: #${input.ticketId.slice(0, 8)} (${input.ticketId})`,
-            `Tenant: ${input.tenantName} (${input.tenantAccessId})`,
-            `Property: ${formatPropertyLabel(input.propertyName, input.unitNumber)}`,
-            `Subject: ${input.subject}`,
-            `Reply: ${truncateText(input.message, 450)}`,
+            '📩 New Tenant Reply',
+            `🎫 Ticket: #${input.ticketId.slice(0, 8)} (${input.ticketId})`,
+            `👤 Tenant: ${input.tenantName} (${input.tenantAccessId})`,
+            `🏠 Property: ${formatPropertyLabel(input.propertyName, input.unitNumber)}`,
+            `📝 Subject: ${input.subject}`,
+            `💬 Reply: ${truncateText(input.message, 450)}`,
             '',
-            'Reply from chat:',
+            '↩️ Reply from chat:',
             `/reply ${input.ticketId} <your message>`,
-            `Dashboard: ${buildFrontendUrl('/owner/notifications')}`,
+            `🔗 Dashboard: ${buildFrontendUrl('/owner/notifications')}`,
           ].join('\n'),
           logContext: {
             organizationId: input.organizationId,
@@ -342,15 +341,15 @@ export async function notifyOwnerRentPaymentAwaitingApproval(input: {
         await sendTelegramMessageWithRetry({
           chatId: telegramLink.chat_id,
           text: [
-            'Rent Payment: Approval Required',
-            `Approval ID: ${input.approvalId}`,
-            `Tenant: ${input.tenantName} (${input.tenantAccessId})`,
-            `Property: ${formatPropertyLabel(input.propertyName, input.unitNumber)}`,
-            `Due date: ${dueDateLabel}`,
-            `Amount: ${amountPaidLabel}`,
+            '💸 Rent Payment Approval Required',
+            `🆔 Approval ID: ${input.approvalId}`,
+            `👤 Tenant: ${input.tenantName} (${input.tenantAccessId})`,
+            `🏠 Property: ${formatPropertyLabel(input.propertyName, input.unitNumber)}`,
+            `📅 Due date: ${dueDateLabel}`,
+            `💰 Amount: ${amountPaidLabel}`,
             '',
-            'Use buttons below to approve or reject.',
-            `Dashboard: ${buildFrontendUrl('/owner/notifications')}`,
+            '⚡ Use buttons below to approve or reject.',
+            `🔗 Dashboard: ${buildFrontendUrl('/owner/notifications')}`,
           ].join('\n'),
           replyMarkup: {
             inline_keyboard: [
@@ -429,12 +428,12 @@ export async function notifyTenantTicketReply(input: {
       await sendTelegramMessageWithRetry({
         chatId: telegramLink.chat_id,
         text: [
-          'Support Ticket Update',
-          `Subject: ${input.subject}`,
-          `From: ${input.senderName} (${input.senderRoleLabel})`,
-          `Message: ${truncateText(input.message, 450)}`,
+          '📬 Support Ticket Update',
+          `📝 Subject: ${input.subject}`,
+          `👤 From: ${input.senderName} (${input.senderRoleLabel})`,
+          `💬 Message: ${truncateText(input.message, 450)}`,
           '',
-          `View: ${buildFrontendUrl('/tenant/support')}`,
+          `🔗 View: ${buildFrontendUrl('/tenant/support')}`,
         ].join('\n'),
         logContext: {
           organizationId: input.organizationId,
@@ -504,13 +503,13 @@ export async function notifyTenantTicketClosed(input: {
       await sendTelegramMessageWithRetry({
         chatId: telegramLink.chat_id,
         text: [
-          'Support Ticket Closed',
-          `Subject: ${input.subject}`,
-          `Closed by: ${input.senderName} (${input.senderRoleLabel})`,
-          ...(input.closingMessage?.trim() ? [`Note: ${input.closingMessage.trim()}`] : []),
+          '✅ Support Ticket Closed',
+          `📝 Subject: ${input.subject}`,
+          `👤 Closed by: ${input.senderName} (${input.senderRoleLabel})`,
+          ...(input.closingMessage?.trim() ? [`🗒️ Note: ${input.closingMessage.trim()}`] : []),
           '',
           'If the issue is still unresolved, create a new support ticket.',
-          `View: ${buildFrontendUrl('/tenant/support')}`,
+          `🔗 View: ${buildFrontendUrl('/tenant/support')}`,
         ].join('\n'),
         logContext: {
           organizationId: input.organizationId,
@@ -699,21 +698,21 @@ export async function notifyTenantRentPaymentReviewed(input: {
         text:
           input.status === 'approved'
             ? [
-                'Rent Payment Approved',
-                `Amount: ${amountPaidLabel}`,
-                `Due date: ${dueDateLabel}`,
-                `Property: ${formatPropertyLabel(input.propertyName, input.unitNumber)}`,
-                ...(input.ownerMessage?.trim() ? [`Owner note: ${truncateText(input.ownerMessage, 400)}`] : []),
-                `View: ${buildFrontendUrl('/tenant/dashboard')}`,
+                '✅ Rent Payment Approved',
+                `💰 Amount: ${amountPaidLabel}`,
+                `📅 Due date: ${dueDateLabel}`,
+                `🏠 Property: ${formatPropertyLabel(input.propertyName, input.unitNumber)}`,
+                ...(input.ownerMessage?.trim() ? [`🗒️ Owner note: ${truncateText(input.ownerMessage, 400)}`] : []),
+                `🔗 View: ${buildFrontendUrl('/tenant/dashboard')}`,
               ].join('\n')
             : [
-                'Rent Payment Rejected',
-                `Amount: ${amountPaidLabel}`,
-                `Due date: ${dueDateLabel}`,
-                `Property: ${formatPropertyLabel(input.propertyName, input.unitNumber)}`,
-                `Reason: ${input.rejectionReason?.trim() || 'Please contact your property team.'}`,
-                ...(input.ownerMessage?.trim() ? [`Owner note: ${truncateText(input.ownerMessage, 400)}`] : []),
-                `View: ${buildFrontendUrl('/tenant/support')}`,
+                '⚠️ Rent Payment Rejected',
+                `💰 Amount: ${amountPaidLabel}`,
+                `📅 Due date: ${dueDateLabel}`,
+                `🏠 Property: ${formatPropertyLabel(input.propertyName, input.unitNumber)}`,
+                `❗ Reason: ${input.rejectionReason?.trim() || 'Please contact your property team.'}`,
+                ...(input.ownerMessage?.trim() ? [`🗒️ Owner note: ${truncateText(input.ownerMessage, 400)}`] : []),
+                `🔗 View: ${buildFrontendUrl('/tenant/support')}`,
               ].join('\n'),
         logContext: {
           organizationId: input.organizationId,
