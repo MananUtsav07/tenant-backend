@@ -843,6 +843,10 @@ async function processTicketStatusCallback(callback: NonNullable<TelegramWebhook
       await sendTelegramMessageWithRetry({
         chatId: String(chatId),
         text: `To close with note, send:\n/close ${action.ticketId} <closing note>`,
+        replyMarkup: {
+          force_reply: true,
+          input_field_placeholder: `/close ${action.ticketId} Issue resolved after plumbing visit`,
+        },
         logContext: {
           organizationId: ownerLink.organization_id,
           ownerId: ownerLink.owner_id ?? undefined,
@@ -868,6 +872,13 @@ async function processTicketStatusCallback(callback: NonNullable<TelegramWebhook
         action.action === 'approve'
           ? `To approve with message, send:\n/approve ${action.approvalId} <message>`
           : `To reject with reason, send:\n/reject ${action.approvalId} <reason>`,
+      replyMarkup: {
+        force_reply: true,
+        input_field_placeholder:
+          action.action === 'approve'
+            ? `/approve ${action.approvalId} Verified receipt and amount`
+            : `/reject ${action.approvalId} Amount mismatch. Please resubmit.`,
+      },
       logContext: {
         organizationId: ownerLink.organization_id,
         ownerId: ownerLink.owner_id ?? undefined,

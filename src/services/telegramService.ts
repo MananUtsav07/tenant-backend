@@ -33,9 +33,15 @@ type TelegramInlineKeyboardButton = {
   callback_data: string
 }
 
-type TelegramReplyMarkup = {
-  inline_keyboard: TelegramInlineKeyboardButton[][]
-}
+type TelegramReplyMarkup =
+  | {
+      inline_keyboard: TelegramInlineKeyboardButton[][]
+    }
+  | {
+      force_reply: true
+      input_field_placeholder?: string
+      selective?: boolean
+    }
 
 function throwIfError(error: PostgrestError | null, message: string) {
   if (error) {
