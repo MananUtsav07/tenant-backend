@@ -289,6 +289,7 @@ export async function submitTenantRentPayment(input: { tenantId: string; organiz
   }
 
   await notifyOwnerRentPaymentAwaitingApproval({
+    approvalId: approval.id,
     organizationId: input.organizationId,
     ownerId: context.tenant.owner_id,
     tenantId: context.tenant.id,
@@ -334,6 +335,7 @@ export async function reviewOwnerRentPaymentApproval(input: {
   organizationId: string
   action: 'approve' | 'reject'
   rejectionReason?: string
+  ownerMessage?: string
 }) {
   const { data: existing, error: existingError } = await supabaseAdmin
     .from('rent_payment_approvals')
@@ -407,6 +409,7 @@ export async function reviewOwnerRentPaymentApproval(input: {
     currencyCode: reviewedTenant?.organizations?.currency_code ?? 'INR',
     status: input.action === 'approve' ? 'approved' : 'rejected',
     rejectionReason: input.action === 'reject' ? (data.rejection_reason as string | null) ?? null : null,
+    ownerMessage: input.ownerMessage?.trim() || null,
   })
 
   if (input.action === 'approve') {

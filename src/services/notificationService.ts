@@ -61,6 +61,18 @@ function buildFrontendUrl(path: string): string {
   return new URL(path, `${env.FRONTEND_URL.replace(/\/$/, '')}/`).toString()
 }
 
+function truncateText(input: string, max = 500): string {
+  const value = input.trim()
+  return value.length > max ? `${value.slice(0, max)}...` : value
+}
+
+function formatPropertyLabel(propertyName: string | null, unitNumber: string | null): string {
+  if (!propertyName) {
+    return '-'
+  }
+  return `${propertyName}${unitNumber ? ` (${unitNumber})` : ''}`
+}
+
 function formatTicketTelegramMessage(input: {
   ticketId: string
   tenantName: string
@@ -70,18 +82,23 @@ function formatTicketTelegramMessage(input: {
   subject: string
   message: string
 }) {
-  const propertyLabel = input.propertyName
-    ? `${input.propertyName}${input.unitNumber ? ` (${input.unitNumber})` : ''}`
-    : '-'
-  const messagePreview = input.message.length > 500 ? `${input.message.slice(0, 500)}...` : input.message
+  const propertyLabel = formatPropertyLabel(input.propertyName, input.unitNumber)
+  const messagePreview = truncateText(input.message, 450)
+  const ownerTicketsUrl = buildFrontendUrl('/owner/notifications')
 
   return [
-    'New support ticket',
-    `Ticket: #${input.ticketId.slice(0, 8)}`,
+    'Support Ticket: New',
+    `Ticket: #${input.ticketId.slice(0, 8)} (${input.ticketId})`,
     `Tenant: ${input.tenantName} (${input.tenantAccessId})`,
     `Property: ${propertyLabel}`,
     `Subject: ${input.subject}`,
-    `Message: ${messagePreview}`,
+    `Preview: ${messagePreview}`,
+    '',
+    'Quick actions:',
+    '- Use buttons below to update status',
+    '- Reply from chat:',
+    `/reply ${input.ticketId} <your message>`,
+    `Dashboard: ${ownerTicketsUrl}`,
   ].join('\n')
 }
 
@@ -156,6 +173,7 @@ export async function notifyOwnerTicketCreated(input: {
                 { text: 'Mark Resolved', callback_data: `ts|${input.ticketId}|resolved` },
               ],
               [{ text: 'Mark Closed', callback_data: `ts|${input.ticketId}|closed` }],
+              [{ text: 'Close With Note', callback_data: `cn|${input.ticketId}` }],
             ],
           },
           logContext: {
@@ -232,11 +250,16 @@ export async function notifyOwnerTicketReply(input: {
         await sendTelegramMessageWithRetry({
           chatId: telegramLink.chat_id,
           text: [
-            'New tenant reply',
-            `Ticket: #${input.ticketId.slice(0, 8)}`,
+            'Support Ticket: New Reply',
+            `Ticket: #${input.ticketId.slice(0, 8)} (${input.ticketId})`,
             `Tenant: ${input.tenantName} (${input.tenantAccessId})`,
+            `Property: ${formatPropertyLabel(input.propertyName, input.unitNumber)}`,
             `Subject: ${input.subject}`,
-            `Reply: ${input.message.length > 500 ? `${input.message.slice(0, 500)}...` : input.message}`,
+            `Reply: ${truncateText(input.message, 450)}`,
+            '',
+            'Reply from chat:',
+            `/reply ${input.ticketId} <your message>`,
+            `Dashboard: ${buildFrontendUrl('/owner/notifications')}`,
           ].join('\n'),
           logContext: {
             organizationId: input.organizationId,
@@ -257,6 +280,7 @@ export async function notifyOwnerTicketReply(input: {
 }
 
 export async function notifyOwnerRentPaymentAwaitingApproval(input: {
+  approvalId: string
   organizationId: string
   ownerId: string
   tenantId: string
@@ -318,11 +342,28 @@ export async function notifyOwnerRentPaymentAwaitingApproval(input: {
         await sendTelegramMessageWithRetry({
           chatId: telegramLink.chat_id,
           text: [
-            'Rent payment awaiting approval',
+            'Rent Payment: Approval Required',
+            `Approval ID: ${input.approvalId}`,
             `Tenant: ${input.tenantName} (${input.tenantAccessId})`,
+            `Property: ${formatPropertyLabel(input.propertyName, input.unitNumber)}`,
             `Due date: ${dueDateLabel}`,
             `Amount: ${amountPaidLabel}`,
+            '',
+            'Use buttons below to approve or reject.',
+            `Dashboard: ${buildFrontendUrl('/owner/notifications')}`,
           ].join('\n'),
+          replyMarkup: {
+            inline_keyboard: [
+              [
+                { text: 'Approve', callback_data: `ra|approve|${input.approvalId}` },
+                { text: 'Reject', callback_data: `ra|reject|${input.approvalId}` },
+              ],
+              [
+                { text: 'Approve With Message', callback_data: `rm|approve|${input.approvalId}` },
+                { text: 'Reject With Reason', callback_data: `rm|reject|${input.approvalId}` },
+              ],
+            ],
+          },
           logContext: {
             organizationId: input.organizationId,
             ownerId: input.ownerId,
@@ -352,30 +393,29 @@ export async function notifyTenantTicketReply(input: {
   message: string
 }) {
   const tenantEmail = input.tenantEmail?.trim().toLowerCase()
-  if (!tenantEmail) {
-    console.warn('[notifyTenantTicketReply] skipped: tenant email missing', {
+  if (tenantEmail) {
+    try {
+      await sendTenantTicketReplyEmail({
+        to: tenantEmail,
+        tenantName: input.tenantName,
+        subject: input.subject,
+        senderName: input.senderName,
+        senderRoleLabel: input.senderRoleLabel,
+        propertyName: input.propertyName,
+        unitNumber: input.unitNumber,
+        message: input.message,
+      })
+    } catch (error) {
+      console.error('[notifyTenantTicketReply] email failed', {
+        tenantId: input.tenantId,
+        subject: input.subject,
+        error,
+      })
+    }
+  } else {
+    console.warn('[notifyTenantTicketReply] email skipped: tenant email missing', {
       tenantId: input.tenantId,
       subject: input.subject,
-    })
-    return
-  }
-
-  try {
-    await sendTenantTicketReplyEmail({
-      to: tenantEmail,
-      tenantName: input.tenantName,
-      subject: input.subject,
-      senderName: input.senderName,
-      senderRoleLabel: input.senderRoleLabel,
-      propertyName: input.propertyName,
-      unitNumber: input.unitNumber,
-      message: input.message,
-    })
-  } catch (error) {
-    console.error('[notifyTenantTicketReply] email failed', {
-      tenantId: input.tenantId,
-      subject: input.subject,
-      error,
     })
   }
 
@@ -389,10 +429,12 @@ export async function notifyTenantTicketReply(input: {
       await sendTelegramMessageWithRetry({
         chatId: telegramLink.chat_id,
         text: [
-          'Support ticket update',
+          'Support Ticket Update',
           `Subject: ${input.subject}`,
           `From: ${input.senderName} (${input.senderRoleLabel})`,
-          `Message: ${input.message.length > 500 ? `${input.message.slice(0, 500)}...` : input.message}`,
+          `Message: ${truncateText(input.message, 450)}`,
+          '',
+          `View: ${buildFrontendUrl('/tenant/support')}`,
         ].join('\n'),
         logContext: {
           organizationId: input.organizationId,
@@ -426,30 +468,29 @@ export async function notifyTenantTicketClosed(input: {
   closingMessage?: string | null
 }) {
   const tenantEmail = input.tenantEmail?.trim().toLowerCase()
-  if (!tenantEmail) {
-    console.warn('[notifyTenantTicketClosed] skipped: tenant email missing', {
+  if (tenantEmail) {
+    try {
+      await sendTenantTicketClosedEmail({
+        to: tenantEmail,
+        tenantName: input.tenantName,
+        subject: input.subject,
+        senderName: input.senderName,
+        senderRoleLabel: input.senderRoleLabel,
+        propertyName: input.propertyName,
+        unitNumber: input.unitNumber,
+        closingMessage: input.closingMessage ?? null,
+      })
+    } catch (error) {
+      console.error('[notifyTenantTicketClosed] email failed', {
+        tenantId: input.tenantId,
+        subject: input.subject,
+        error,
+      })
+    }
+  } else {
+    console.warn('[notifyTenantTicketClosed] email skipped: tenant email missing', {
       tenantId: input.tenantId,
       subject: input.subject,
-    })
-    return
-  }
-
-  try {
-    await sendTenantTicketClosedEmail({
-      to: tenantEmail,
-      tenantName: input.tenantName,
-      subject: input.subject,
-      senderName: input.senderName,
-      senderRoleLabel: input.senderRoleLabel,
-      propertyName: input.propertyName,
-      unitNumber: input.unitNumber,
-      closingMessage: input.closingMessage ?? null,
-    })
-  } catch (error) {
-    console.error('[notifyTenantTicketClosed] email failed', {
-      tenantId: input.tenantId,
-      subject: input.subject,
-      error,
     })
   }
 
@@ -463,10 +504,13 @@ export async function notifyTenantTicketClosed(input: {
       await sendTelegramMessageWithRetry({
         chatId: telegramLink.chat_id,
         text: [
-          'Support ticket closed',
+          'Support Ticket Closed',
           `Subject: ${input.subject}`,
           `Closed by: ${input.senderName} (${input.senderRoleLabel})`,
           ...(input.closingMessage?.trim() ? [`Note: ${input.closingMessage.trim()}`] : []),
+          '',
+          'If the issue is still unresolved, create a new support ticket.',
+          `View: ${buildFrontendUrl('/tenant/support')}`,
         ].join('\n'),
         logContext: {
           organizationId: input.organizationId,
@@ -587,61 +631,59 @@ export async function notifyTenantRentPaymentReviewed(input: {
   currencyCode: string
   status: 'approved' | 'rejected'
   rejectionReason?: string | null
+  ownerMessage?: string | null
 }) {
   const tenantEmail = input.tenantEmail?.trim().toLowerCase()
-  if (!tenantEmail) {
-    console.warn('[notifyTenantRentPaymentReviewed] skipped: tenant email missing', {
-      tenantId: input.tenantId,
-      status: input.status,
-    })
-    return
-  }
-
-  const owner = await getOwnerById(input.ownerId, input.organizationId)
-  if (!owner) {
-    console.error('[notifyTenantRentPaymentReviewed] skipped: owner missing', {
-      ownerId: input.ownerId,
-      tenantId: input.tenantId,
-      status: input.status,
-    })
-    return
-  }
-
-  const ownerName = normalizeOwnerName(owner)
   const dueDateLabel = formatDateLabel(input.dueDateIso)
   const amountPaidLabel = formatCurrencyLabel(input.amountPaid, input.currencyCode)
 
-  try {
-    if (input.status === 'approved') {
-      await sendTenantRentPaymentApprovedEmail({
-        to: tenantEmail,
-        tenantName: input.tenantName,
-        propertyName: input.propertyName,
-        unitNumber: input.unitNumber,
-        dueDateLabel,
-        amountPaidLabel,
-        ownerName,
+  if (tenantEmail) {
+    const owner = await getOwnerById(input.ownerId, input.organizationId)
+    if (!owner) {
+      console.error('[notifyTenantRentPaymentReviewed] skipped email: owner missing', {
+        ownerId: input.ownerId,
+        tenantId: input.tenantId,
+        status: input.status,
       })
-      return
+    } else {
+      const ownerName = normalizeOwnerName(owner)
+      try {
+        if (input.status === 'approved') {
+          await sendTenantRentPaymentApprovedEmail({
+            to: tenantEmail,
+            tenantName: input.tenantName,
+            propertyName: input.propertyName,
+            unitNumber: input.unitNumber,
+            dueDateLabel,
+            amountPaidLabel,
+            ownerName,
+          })
+        } else {
+          await sendTenantRentPaymentRejectedEmail({
+            to: tenantEmail,
+            tenantName: input.tenantName,
+            propertyName: input.propertyName,
+            unitNumber: input.unitNumber,
+            dueDateLabel,
+            amountPaidLabel,
+            ownerName,
+            rejectionReason:
+              input.rejectionReason?.trim() ||
+              'The submitted payment could not be approved yet. Please review your details and contact the property team if needed.',
+          })
+        }
+      } catch (error) {
+        console.error('[notifyTenantRentPaymentReviewed] email failed', {
+          tenantId: input.tenantId,
+          status: input.status,
+          error,
+        })
+      }
     }
-
-    await sendTenantRentPaymentRejectedEmail({
-      to: tenantEmail,
-      tenantName: input.tenantName,
-      propertyName: input.propertyName,
-      unitNumber: input.unitNumber,
-      dueDateLabel,
-      amountPaidLabel,
-      ownerName,
-      rejectionReason:
-        input.rejectionReason?.trim() ||
-        'The submitted payment could not be approved yet. Please review your details and contact the property team if needed.',
-    })
-  } catch (error) {
-    console.error('[notifyTenantRentPaymentReviewed] email failed', {
+  } else {
+    console.warn('[notifyTenantRentPaymentReviewed] email skipped: tenant email missing', {
       tenantId: input.tenantId,
       status: input.status,
-      error,
     })
   }
 
@@ -656,12 +698,22 @@ export async function notifyTenantRentPaymentReviewed(input: {
         chatId: telegramLink.chat_id,
         text:
           input.status === 'approved'
-            ? ['Rent payment approved', `Amount: ${amountPaidLabel}`, `Due date: ${dueDateLabel}`].join('\n')
-            : [
-                'Rent payment rejected',
+            ? [
+                'Rent Payment Approved',
                 `Amount: ${amountPaidLabel}`,
                 `Due date: ${dueDateLabel}`,
+                `Property: ${formatPropertyLabel(input.propertyName, input.unitNumber)}`,
+                ...(input.ownerMessage?.trim() ? [`Owner note: ${truncateText(input.ownerMessage, 400)}`] : []),
+                `View: ${buildFrontendUrl('/tenant/dashboard')}`,
+              ].join('\n')
+            : [
+                'Rent Payment Rejected',
+                `Amount: ${amountPaidLabel}`,
+                `Due date: ${dueDateLabel}`,
+                `Property: ${formatPropertyLabel(input.propertyName, input.unitNumber)}`,
                 `Reason: ${input.rejectionReason?.trim() || 'Please contact your property team.'}`,
+                ...(input.ownerMessage?.trim() ? [`Owner note: ${truncateText(input.ownerMessage, 400)}`] : []),
+                `View: ${buildFrontendUrl('/tenant/support')}`,
               ].join('\n'),
         logContext: {
           organizationId: input.organizationId,
