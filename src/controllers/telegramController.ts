@@ -47,6 +47,7 @@ type CallbackAction =
   | { kind: 'rent_approval'; approvalId: string; action: 'approve' | 'reject' }
   | { kind: 'prompt_close_note'; ticketId: string }
   | { kind: 'prompt_rent_message'; approvalId: string; action: 'approve' | 'reject' }
+  | { kind: 'menu'; action: 'stats' | 'open_tickets' | 'tenants' | 'approvals' | 'help' | 'refresh' }
 
 function readStartToken(text: string | undefined): string | null {
   if (typeof text !== 'string') {
@@ -194,6 +195,14 @@ function parseCallbackData(data: string | undefined): CallbackAction | null {
     }
   }
 
+  const menuMatched = data.match(/^mn\|(stats|open_tickets|tenants|approvals|help|refresh)$/i)
+  if (menuMatched) {
+    return {
+      kind: 'menu',
+      action: menuMatched[1].toLowerCase() as 'stats' | 'open_tickets' | 'tenants' | 'approvals' | 'help' | 'refresh',
+    }
+  }
+
   return null
 }
 
@@ -208,6 +217,200 @@ async function resolveOwnerLinkFromTelegramIdentity(input: { chatId: string; tel
   }
 
   return ownerLink
+}
+
+function ownerMainMenuReplyMarkup() {
+  return {
+    inline_keyboard: [
+      [
+        { text: 'View Stats', callback_data: 'mn|stats' },
+        { text: 'Open Tickets', callback_data: 'mn|open_tickets' },
+      ],
+      [
+        { text: 'View Tenants', callback_data: 'mn|tenants' },
+        { text: 'Pending Approvals', callback_data: 'mn|approvals' },
+      ],
+      [{ text: 'Refresh Menu', callback_data: 'mn|refresh' }, { text: 'Help', callback_data: 'mn|help' }],
+    ],
+  }
+}
+
+async function sendOwnerMainMenu(input: { chatId: string; organizationId: string; ownerId: string }) {
+  await sendTelegramMessageWithRetry({
+    chatId: input.chatId,
+    text: [
+      'Owner Control Panel',
+      'Use the buttons below to quickly view your data.',
+      '',
+      'Quick commands:',
+      '/reply <ticket-id> <message>',
+      '/close <ticket-id> <closing-note>',
+      '/approve <approval-id> [message]',
+      '/reject <approval-id> <reason>',
+    ].join('\n'),
+    replyMarkup: ownerMainMenuReplyMarkup(),
+    logContext: {
+      organizationId: input.organizationId,
+      ownerId: input.ownerId,
+      userRole: 'owner',
+      eventType: 'owner_menu_sent',
+    },
+  })
+}
+
+async function sendOwnerOpenTicketsSnapshot(input: { chatId: string; organizationId: string; ownerId: string }) {
+  const { data, error } = await supabaseAdmin
+    .from('support_tickets')
+    .select('id, subject, status, created_at, tenants(full_name, tenant_access_id)')
+    .eq('organization_id', input.organizationId)
+    .eq('owner_id', input.ownerId)
+    .in('status', ['open', 'in_progress'])
+    .order('created_at', { ascending: false })
+    .limit(5)
+
+  if (error) {
+    throw new AppError('Failed to load open tickets', 500)
+  }
+
+  const lines = (data ?? []).map((row) => {
+    const tenant = (row.tenants as { full_name?: string | null; tenant_access_id?: string | null } | null) ?? null
+    return `- #${String(row.id).slice(0, 8)} [${row.status}] ${row.subject} (${tenant?.full_name ?? tenant?.tenant_access_id ?? 'Tenant'})`
+  })
+
+  await sendTelegramMessageWithRetry({
+    chatId: input.chatId,
+    text: lines.length > 0 ? ['Open Tickets (latest 5)', ...lines].join('\n') : 'Open Tickets: none right now.',
+    logContext: {
+      organizationId: input.organizationId,
+      ownerId: input.ownerId,
+      userRole: 'owner',
+      eventType: 'owner_menu_open_tickets',
+    },
+  })
+}
+
+async function sendOwnerTenantsSnapshot(input: { chatId: string; organizationId: string; ownerId: string }) {
+  const { data, error } = await supabaseAdmin
+    .from('tenants')
+    .select('id, full_name, tenant_access_id, status, payment_status')
+    .eq('organization_id', input.organizationId)
+    .eq('owner_id', input.ownerId)
+    .order('created_at', { ascending: false })
+    .limit(8)
+
+  if (error) {
+    throw new AppError('Failed to load tenants', 500)
+  }
+
+  const lines = (data ?? []).map(
+    (row) => `- ${row.full_name} (${row.tenant_access_id}) | ${row.status} | rent: ${row.payment_status}`,
+  )
+
+  await sendTelegramMessageWithRetry({
+    chatId: input.chatId,
+    text: lines.length > 0 ? ['Tenants (latest 8)', ...lines].join('\n') : 'Tenants: none found.',
+    logContext: {
+      organizationId: input.organizationId,
+      ownerId: input.ownerId,
+      userRole: 'owner',
+      eventType: 'owner_menu_tenants',
+    },
+  })
+}
+
+async function sendOwnerPendingApprovalsSnapshot(input: { chatId: string; organizationId: string; ownerId: string }) {
+  const { data, error } = await supabaseAdmin
+    .from('rent_payment_approvals')
+    .select('id, due_date, amount_paid, tenants(full_name, tenant_access_id)')
+    .eq('organization_id', input.organizationId)
+    .eq('owner_id', input.ownerId)
+    .eq('status', 'awaiting_owner_approval')
+    .order('created_at', { ascending: false })
+    .limit(5)
+
+  if (error) {
+    throw new AppError('Failed to load pending approvals', 500)
+  }
+
+  const lines = (data ?? []).map((row) => {
+    const tenant = (row.tenants as { full_name?: string | null; tenant_access_id?: string | null } | null) ?? null
+    return `- ${tenant?.full_name ?? tenant?.tenant_access_id ?? 'Tenant'} | ${row.amount_paid} | due ${row.due_date} | ID: ${row.id}`
+  })
+
+  await sendTelegramMessageWithRetry({
+    chatId: input.chatId,
+    text:
+      lines.length > 0
+        ? ['Pending Rent Approvals (latest 5)', ...lines, 'Use /approve <id> [message] or /reject <id> <reason>'].join(
+            '\n',
+          )
+        : 'Pending Rent Approvals: none right now.',
+    logContext: {
+      organizationId: input.organizationId,
+      ownerId: input.ownerId,
+      userRole: 'owner',
+      eventType: 'owner_menu_approvals',
+    },
+  })
+}
+
+async function processOwnerMenuAction(input: {
+  chatId: string
+  telegramUserId: string
+  action: 'stats' | 'open_tickets' | 'tenants' | 'approvals' | 'help' | 'refresh'
+}) {
+  const ownerLink = await resolveOwnerLinkFromTelegramIdentity({
+    chatId: input.chatId,
+    telegramUserId: input.telegramUserId,
+  })
+
+  if (input.action === 'stats') {
+    await processOwnerStatsCommand({
+      chat: { id: input.chatId },
+      from: { id: input.telegramUserId },
+    })
+    return
+  }
+
+  if (input.action === 'open_tickets') {
+    await sendOwnerOpenTicketsSnapshot({
+      chatId: input.chatId,
+      organizationId: ownerLink.organization_id,
+      ownerId: ownerLink.owner_id!,
+    })
+    return
+  }
+
+  if (input.action === 'tenants') {
+    await sendOwnerTenantsSnapshot({
+      chatId: input.chatId,
+      organizationId: ownerLink.organization_id,
+      ownerId: ownerLink.owner_id!,
+    })
+    return
+  }
+
+  if (input.action === 'approvals') {
+    await sendOwnerPendingApprovalsSnapshot({
+      chatId: input.chatId,
+      organizationId: ownerLink.organization_id,
+      ownerId: ownerLink.owner_id!,
+    })
+    return
+  }
+
+  if (input.action === 'help') {
+    await processHelpCommand({
+      chat: { id: input.chatId },
+    })
+    return
+  }
+
+  await sendOwnerMainMenu({
+    chatId: input.chatId,
+    organizationId: ownerLink.organization_id,
+    ownerId: ownerLink.owner_id!,
+  })
 }
 
 async function processOwnerStatsCommand(payload: TelegramWebhookUpdate['message']) {
@@ -604,6 +807,19 @@ async function processTicketStatusCallback(callback: NonNullable<TelegramWebhook
       return
     }
 
+    if (action.kind === 'menu') {
+      await processOwnerMenuAction({
+        chatId: String(chatId),
+        telegramUserId: String(userId),
+        action: action.action,
+      })
+      await answerTelegramCallbackQuery({
+        callbackQueryId: callbackId,
+        text: 'Updated.',
+      })
+      return
+    }
+
     if (action.kind === 'rent_approval') {
       await reviewOwnerRentPaymentApproval({
         approvalId: action.approvalId,
@@ -811,7 +1027,25 @@ export const postTelegramWebhook = asyncHandler(async (request: Request, respons
 
   if (isHelpCommand(text) || isBareStartCommand(text)) {
     try {
-      await processHelpCommand(payload.message)
+      const chatIdForMenu = payload.message?.chat?.id
+      const userIdForMenu = payload.message?.from?.id
+      if (chatIdForMenu !== undefined && userIdForMenu !== undefined) {
+        const ownerLink = await getOwnerTelegramChatLinkByChat({
+          chatId: String(chatIdForMenu),
+          telegramUserId: String(userIdForMenu),
+        })
+        if (ownerLink?.owner_id) {
+          await sendOwnerMainMenu({
+            chatId: String(chatIdForMenu),
+            organizationId: ownerLink.organization_id,
+            ownerId: ownerLink.owner_id,
+          })
+        } else {
+          await processHelpCommand(payload.message)
+        }
+      } else {
+        await processHelpCommand(payload.message)
+      }
       response.json({ ok: true, help: true })
     } catch (error) {
       console.error('[telegram-help-command-failed]', {
@@ -837,7 +1071,7 @@ export const postTelegramWebhook = asyncHandler(async (request: Request, respons
   }
 
   try {
-    await linkTelegramChatFromStartToken({
+    const linked = await linkTelegramChatFromStartToken({
       startToken,
       chatId: String(chatId),
       telegramUserId: String(userId),
@@ -846,14 +1080,24 @@ export const postTelegramWebhook = asyncHandler(async (request: Request, respons
       lastName: payload.message?.from?.last_name ?? null,
     })
 
-    await sendTelegramMessageWithRetry({
-      chatId: String(chatId),
-      text: 'Telegram connected successfully. You will now receive alerts for your linked account.',
-      logContext: {
-        userRole: 'system',
-        eventType: 'telegram_onboarding_success',
-      },
-    })
+    if (linked.role === 'owner' && linked.owner_id) {
+      await sendOwnerMainMenu({
+        chatId: String(chatId),
+        organizationId: linked.organization_id,
+        ownerId: linked.owner_id,
+      })
+    } else {
+      await sendTelegramMessageWithRetry({
+        chatId: String(chatId),
+        text: 'Telegram connected successfully. You will now receive alerts for your linked account.',
+        logContext: {
+          organizationId: linked.organization_id,
+          tenantId: linked.tenant_id ?? undefined,
+          userRole: linked.role === 'tenant' ? 'tenant' : 'system',
+          eventType: 'telegram_onboarding_success',
+        },
+      })
+    }
 
     response.json({
       ok: true,
