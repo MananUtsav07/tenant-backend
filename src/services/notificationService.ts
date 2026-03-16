@@ -901,3 +901,81 @@ export async function notifyOwnerMaintenanceResolution(input: {
     })
   }
 }
+
+export async function notifyTenantLeasePreferenceSubmitted(input: {
+  organizationId: string
+  ownerId: string
+  tenantId: string
+  tenantName: string
+  tenantAccessId: string
+  propertyName: string | null
+  unitNumber: string | null
+  leaseEndDate: string
+  decision: 'yes' | 'no'
+  brokerEmail?: string | null
+  brokerName?: string | null
+}) {
+  const owner = await getOwnerById(input.ownerId, input.organizationId)
+  if (!owner) {
+    throw new AppError('Owner not found for lease preference notification', 404)
+  }
+
+  const ownerName = normalizeOwnerName(owner)
+  const decisionLabel = input.decision === 'yes' ? 'Wants to continue' : 'Will not continue'
+  const title = `Lease preference submitted: ${input.tenantName}`
+  const message = `${input.tenantName} selected "${decisionLabel}" for lease ending ${formatDateLabel(input.leaseEndDate)}.`
+
+  await createOwnerNotification({
+    organization_id: input.organizationId,
+    owner_id: input.ownerId,
+    tenant_id: input.tenantId,
+    notification_type: 'lease_renewal_preference_submitted',
+    title,
+    message,
+  })
+
+  const recipients = [owner.email, owner.support_email ?? null, input.brokerEmail ?? null]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .filter((value, index, list) => list.indexOf(value) === index)
+
+  if (recipients.length === 0) {
+    return
+  }
+
+  try {
+    await sendBrandedMessageEmail({
+      to: recipients.join(', '),
+      subject: title,
+      preheader: 'Tenant lease continuation preference has been submitted.',
+      eyebrow: 'Lease Preference',
+      title,
+      intro: [`${input.tenantName} has submitted a lease continuation preference from the tenant dashboard.`],
+      details: [
+        { label: 'Tenant', value: `${input.tenantName} (${input.tenantAccessId})` },
+        { label: 'Property', value: input.propertyName?.trim() || 'Property' },
+        { label: 'Unit', value: input.unitNumber?.trim() || '-' },
+        { label: 'Lease End Date', value: formatDateLabel(input.leaseEndDate), emphasize: true },
+        { label: 'Preference', value: decisionLabel, emphasize: true },
+      ],
+      body: [
+        input.decision === 'yes'
+          ? 'Tenant is interested in continuing after the current lease period. You can now start renewal coordination.'
+          : 'Tenant does not want to continue after the current lease period. You can now start replacement planning.',
+      ],
+      note: {
+        title: 'Recipients',
+        body: input.brokerEmail
+          ? `This alert was sent to owner and assigned broker (${input.brokerName?.trim() || input.brokerEmail}).`
+          : `This alert was sent to owner only (${ownerName}).`,
+        tone: 'info',
+      },
+    })
+  } catch (error) {
+    console.error('[notifyTenantLeasePreferenceSubmitted] email failed', {
+      ownerId: input.ownerId,
+      tenantId: input.tenantId,
+      decision: input.decision,
+      error,
+    })
+  }
+}

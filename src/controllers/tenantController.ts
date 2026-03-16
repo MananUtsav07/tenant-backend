@@ -9,7 +9,13 @@ import {
   getTenantConditionReportDetail,
   getTenantConditionReports,
 } from '../services/conditionReportService.js'
-import { notifyOwnerMaintenanceResolution, notifyOwnerTicketCreated, notifyOwnerTicketReply } from '../services/notificationService.js'
+import {
+  notifyOwnerMaintenanceResolution,
+  notifyOwnerTicketCreated,
+  notifyOwnerTicketReply,
+  notifyTenantLeasePreferenceSubmitted,
+} from '../services/notificationService.js'
+import { getTenantLeaseRenewalIntentState, submitTenantLeaseRenewalIntent } from '../services/leaseRenewalIntentService.js'
 import {
   confirmTenantMaintenanceCompletion,
   getTenantMaintenanceWorkflowOverview,
@@ -29,7 +35,7 @@ import { nextDueDateFromDay } from '../utils/date.js'
 import { tenantMaintenanceCompletionSchema } from '../validations/maintenanceWorkflowSchemas.js'
 import { addConditionReportMediaSchema, confirmConditionReportSchema } from '../validations/conditionReportSchemas.js'
 import { tenantMarkRentPaidSchema } from '../validations/rentPaymentSchemas.js'
-import { createTenantTicketSchema } from '../validations/tenantSchemas.js'
+import { createTenantTicketSchema, tenantLeaseRenewalIntentSchema } from '../validations/tenantSchemas.js'
 import { createTicketReplySchema } from '../validations/ticketSchemas.js'
 
 function requireTenantIdentity(request: Request) {
@@ -73,6 +79,19 @@ export const getTenantDashboardSummary = asyncHandler(async (request: Request, r
       lease_end_date: tenant.lease_end_date,
       next_due_date: nextDueDateFromDay(tenant.payment_due_day).toISOString(),
     },
+  })
+})
+
+export const getTenantLeaseRenewalIntentStateController = asyncHandler(async (request: Request, response: Response) => {
+  const { tenantId, organizationId } = requireTenantIdentity(request)
+  const state = await getTenantLeaseRenewalIntentState({
+    tenantId,
+    organizationId,
+  })
+
+  response.json({
+    ok: true,
+    state,
   })
 })
 
@@ -328,6 +347,55 @@ export const postTenantTicket = asyncHandler(async (request: Request, response: 
   }
 
   response.status(201).json({ ok: true, ticket })
+})
+
+export const postTenantLeaseRenewalIntentController = asyncHandler(async (request: Request, response: Response) => {
+  const { tenantId, organizationId, ownerId } = requireTenantIdentity(request)
+  const parsed = tenantLeaseRenewalIntentSchema.parse(request.body ?? {})
+
+  const result = await submitTenantLeaseRenewalIntent({
+    tenantId,
+    organizationId,
+    decision: parsed.decision,
+  })
+
+  await createAuditLog({
+    organization_id: organizationId,
+    actor_id: tenantId,
+    actor_role: 'tenant',
+    action: 'tenant.lease_renewal_preference_submitted',
+    entity_type: 'lease_renewal_intent',
+    entity_id: result.intent.id,
+    metadata: {
+      decision: parsed.decision,
+      lease_end_date: result.intent.lease_end_date,
+      days_remaining: result.days_remaining,
+    },
+  })
+
+  await notifyTenantLeasePreferenceSubmitted({
+    organizationId,
+    ownerId,
+    tenantId,
+    tenantName: result.context.full_name,
+    tenantAccessId: result.context.tenant_access_id,
+    propertyName: result.context.properties?.property_name ?? null,
+    unitNumber: result.context.properties?.unit_number ?? null,
+    leaseEndDate: result.intent.lease_end_date,
+    decision: parsed.decision,
+    brokerEmail: result.context.brokers?.email ?? null,
+    brokerName: result.context.brokers?.full_name ?? null,
+  })
+
+  response.status(201).json({
+    ok: true,
+    intent: {
+      id: result.intent.id,
+      decision: result.intent.response,
+      lease_end_date: result.intent.lease_end_date,
+      responded_at: result.intent.responded_at,
+    },
+  })
 })
 
 export const postTenantTicketReply = asyncHandler(async (request: Request, response: Response) => {

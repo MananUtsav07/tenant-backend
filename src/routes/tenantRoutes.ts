@@ -4,6 +4,7 @@ import {
   getTenantConditionReportDetailController,
   getTenantConditionReportsController,
   getTenantDashboardSummary,
+  getTenantLeaseRenewalIntentStateController,
   getTenantOwnerContact,
   getTenantProperty,
   getTenantRentPaymentState,
@@ -13,6 +14,7 @@ import {
   getTenantTickets,
   postTenantConditionReportConfirmController,
   postTenantConditionReportMediaController,
+  postTenantLeaseRenewalIntentController,
   postTenantMaintenanceCompletion,
   postTenantRentPaymentMarkPaid,
   postTenantTicketReply,
@@ -27,6 +29,8 @@ export function createTenantRouter() {
   router.use(requireTenantAuth)
 
   router.get('/dashboard-summary', getTenantDashboardSummary)
+  router.get('/lease-renewal-intent-state', getTenantLeaseRenewalIntentStateController)
+  router.post('/lease-renewal-intent', postTenantLeaseRenewalIntentController)
   router.get('/property', getTenantProperty)
   router.get('/condition-reports', getTenantConditionReportsController)
   router.get('/condition-reports/:reportId', getTenantConditionReportDetailController)
