@@ -14,6 +14,7 @@ export const updatePropertySchema = z.object({
 
 export const createTenantSchema = z.object({
   property_id: z.string().uuid(),
+  broker_id: z.string().uuid().optional(),
   full_name: z.string().trim().min(1).max(200),
   email: z.string().email().optional(),
   phone: z.string().trim().max(30).optional(),
@@ -28,6 +29,7 @@ export const createTenantSchema = z.object({
 
 export const updateTenantSchema = z.object({
   property_id: z.string().uuid().optional(),
+  broker_id: z.string().uuid().nullable().optional(),
   full_name: z.string().trim().min(1).max(200).optional(),
   email: z.string().email().nullable().optional(),
   phone: z.string().trim().max(30).nullable().optional(),

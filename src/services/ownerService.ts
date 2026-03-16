@@ -241,6 +241,7 @@ export async function createTenant(args: {
   organizationId: string
   input: {
     property_id: string
+    broker_id?: string | null
     full_name: string
     email?: string
     phone?: string
@@ -261,6 +262,7 @@ export async function createTenant(args: {
       owner_id: args.ownerId,
       organization_id: args.organizationId,
       property_id: args.input.property_id,
+      broker_id: args.input.broker_id ?? null,
       full_name: args.input.full_name,
       email: args.input.email ?? null,
       phone: args.input.phone ?? null,
@@ -283,7 +285,7 @@ export async function createTenant(args: {
 export async function listTenants(organizationId: string) {
   const { data, error } = await supabaseAdmin
     .from('tenants')
-    .select('*, properties(id, property_name, address, unit_number)')
+    .select('*, properties(id, property_name, address, unit_number), brokers(id, full_name, email, phone, agency_name, is_active)')
     .eq('organization_id', organizationId)
     .order('created_at', { ascending: false })
 
@@ -302,7 +304,7 @@ export async function listTenants(organizationId: string) {
 export async function getTenantForOwner(organizationId: string, tenantId: string) {
   const { data, error } = await supabaseAdmin
     .from('tenants')
-    .select('*, properties(*)')
+    .select('*, properties(*), brokers(id, full_name, email, phone, agency_name, is_active)')
     .eq('id', tenantId)
     .eq('organization_id', organizationId)
     .maybeSingle()

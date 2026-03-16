@@ -2,6 +2,7 @@ import { Router } from 'express'
 
 import {
   createOwnerProperty,
+  getOwnerBrokerList,
   createOwnerTenant,
   getOwnerNotificationList,
   getOwnerNotificationPreferencesController,
@@ -31,6 +32,7 @@ import {
   markAllOwnerNotificationsRead,
   markOwnerNotificationRead,
   patchOwnerProperty,
+  patchOwnerBroker,
   patchOwnerConditionReportRoomController,
   patchOwnerRentPaymentApproval,
   patchOwnerContractorDirectoryController,
@@ -62,8 +64,10 @@ import {
   putOwnerNotificationPreferencesController,
   postOwnerTenantConditionReportController,
   processReminders,
+  postOwnerBroker,
   putOwnerAutomationSettingsController,
   removeOwnerProperty,
+  removeOwnerBroker,
   removeOwnerTenant,
 } from '../controllers/ownerController.js'
 import { requireOwnerAuth } from '../middleware/ownerAuth.js'
@@ -78,6 +82,11 @@ export function createOwnerRouter() {
   router.patch('/properties/:id', patchOwnerProperty)
   router.delete('/properties/:id', removeOwnerProperty)
   router.post('/properties/:id/vacancy-campaigns', postOwnerPropertyVacancyCampaignController)
+
+  router.get('/brokers', getOwnerBrokerList)
+  router.post('/brokers', postOwnerBroker)
+  router.patch('/brokers/:brokerId', patchOwnerBroker)
+  router.delete('/brokers/:brokerId', removeOwnerBroker)
 
   router.post('/tenants', createOwnerTenant)
   router.get('/tenants', getOwnerTenants)

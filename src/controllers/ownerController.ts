@@ -4,6 +4,7 @@ import type { Request, Response } from 'express'
 import { AppError, asyncHandler } from '../lib/errors.js'
 import { requireOrganizationContext } from '../middleware/organizationContext.js'
 import { createAuditLog } from '../services/auditLogService.js'
+import { createBroker, deleteBroker, getBrokerById, listBrokers, updateBroker } from '../services/brokerService.js'
 import {
   notifyTenantAccountProvisioned,
   notifyTenantMaintenanceCompleted,
@@ -126,6 +127,7 @@ import {
   ownerCreateConditionReportSchema,
   updateConditionReportRoomSchema,
 } from '../validations/conditionReportSchemas.js'
+import { createBrokerSchema, updateBrokerSchema } from '../validations/brokerSchemas.js'
 
 function requireOwnerContext(request: Request): { ownerId: string; organizationId: string } {
   const ownerId = request.owner?.ownerId
@@ -653,6 +655,15 @@ export const createOwnerTenant = asyncHandler(async (request: Request, response:
   if (!property) {
     throw new AppError('Property not found in your organization', 404)
   }
+  if (parsed.broker_id) {
+    const broker = await getBrokerById({
+      organizationId,
+      brokerId: parsed.broker_id,
+    })
+    if (!broker) {
+      throw new AppError('Broker not found in your organization', 404)
+    }
+  }
 
   const passwordHash = await bcrypt.hash(parsed.password, 10)
   const owner = await getOwnerById(ownerId, organizationId)
@@ -662,6 +673,7 @@ export const createOwnerTenant = asyncHandler(async (request: Request, response:
     organizationId,
     input: {
       property_id: parsed.property_id,
+      broker_id: parsed.broker_id ?? null,
       full_name: parsed.full_name,
       email: parsed.email,
       phone: parsed.phone,
@@ -730,6 +742,91 @@ export const getOwnerTenants = asyncHandler(async (request: Request, response: R
   const organizationId = requireOrganizationContext(request)
   const tenants = await listTenants(organizationId)
   response.json({ ok: true, tenants })
+})
+
+export const getOwnerBrokerList = asyncHandler(async (request: Request, response: Response) => {
+  const organizationId = requireOrganizationContext(request)
+  const brokers = await listBrokers(organizationId)
+  response.json({ ok: true, brokers })
+})
+
+export const postOwnerBroker = asyncHandler(async (request: Request, response: Response) => {
+  const { ownerId, organizationId } = requireOwnerContext(request)
+  const parsed = createBrokerSchema.parse(request.body)
+  const broker = await createBroker({
+    organizationId,
+    ownerId,
+    ...parsed,
+  })
+
+  await createAuditLog({
+    organization_id: organizationId,
+    actor_id: ownerId,
+    actor_role: 'owner',
+    action: 'broker.created',
+    entity_type: 'broker',
+    entity_id: broker.id,
+    metadata: {
+      full_name: broker.full_name,
+      email: broker.email,
+      is_active: broker.is_active,
+    },
+  })
+
+  response.status(201).json({ ok: true, broker })
+})
+
+export const patchOwnerBroker = asyncHandler(async (request: Request, response: Response) => {
+  const { ownerId, organizationId } = requireOwnerContext(request)
+  const brokerId = readPathId(request, 'brokerId')
+  const parsed = updateBrokerSchema.parse(request.body ?? {})
+  if (Object.keys(parsed).length === 0) {
+    throw new AppError('No broker fields provided', 400)
+  }
+
+  const broker = await updateBroker({
+    organizationId,
+    brokerId,
+    patch: parsed,
+  })
+  if (!broker) {
+    throw new AppError('Broker not found in your organization', 404)
+  }
+
+  await createAuditLog({
+    organization_id: organizationId,
+    actor_id: ownerId,
+    actor_role: 'owner',
+    action: 'broker.updated',
+    entity_type: 'broker',
+    entity_id: broker.id,
+    metadata: parsed,
+  })
+
+  response.json({ ok: true, broker })
+})
+
+export const removeOwnerBroker = asyncHandler(async (request: Request, response: Response) => {
+  const { ownerId, organizationId } = requireOwnerContext(request)
+  const brokerId = readPathId(request, 'brokerId')
+  const deletedCount = await deleteBroker({
+    organizationId,
+    brokerId,
+  })
+  if (!deletedCount) {
+    throw new AppError('Broker not found in your organization', 404)
+  }
+
+  await createAuditLog({
+    organization_id: organizationId,
+    actor_id: ownerId,
+    actor_role: 'owner',
+    action: 'broker.deleted',
+    entity_type: 'broker',
+    entity_id: brokerId,
+  })
+
+  response.json({ ok: true })
 })
 
 export const getOwnerTenantById = asyncHandler(async (request: Request, response: Response) => {
@@ -900,6 +997,15 @@ export const patchOwnerTenant = asyncHandler(async (request: Request, response: 
 
   if (Object.keys(parsed).length === 0) {
     throw new AppError('No tenant fields provided', 400)
+  }
+  if (parsed.broker_id) {
+    const broker = await getBrokerById({
+      organizationId,
+      brokerId: parsed.broker_id,
+    })
+    if (!broker) {
+      throw new AppError('Broker not found in your organization', 404)
+    }
   }
 
   const previousTenant = await getTenantForOwner(organizationId, tenantId)
