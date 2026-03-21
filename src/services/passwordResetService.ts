@@ -166,10 +166,11 @@ export async function requestOwnerPasswordReset(email: string) {
       expiresInLabel: formatMinutesLabel(env.PASSWORD_RESET_TOKEN_TTL_MINUTES),
     })
   } catch (error) {
-    console.error('[requestOwnerPasswordReset] email failed', {
+    const message = error instanceof Error ? error.message : String(error)
+    const code = (error as Record<string, unknown>)?.code ?? 'UNKNOWN'
+    console.error(`[requestOwnerPasswordReset] email failed — code=${String(code)} message=${message}`, {
       ownerId: owner.id,
       email: owner.email,
-      error,
     })
   }
 }
@@ -219,11 +220,12 @@ export async function requestTenantPasswordReset(input: {
       expiresInLabel: formatMinutesLabel(env.PASSWORD_RESET_TOKEN_TTL_MINUTES),
     })
   } catch (error) {
-    console.error('[requestTenantPasswordReset] email failed', {
+    const message = error instanceof Error ? error.message : String(error)
+    const code = (error as Record<string, unknown>)?.code ?? 'UNKNOWN'
+    console.error(`[requestTenantPasswordReset] email failed — code=${String(code)} message=${message}`, {
       tenantId: tenant.id,
       tenantAccessId: tenant.tenant_access_id,
       email: tenantEmail,
-      error,
     })
   }
 }

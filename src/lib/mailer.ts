@@ -11,6 +11,11 @@ const transporter = env.SMTP_HOST
         user: env.EMAIL_USER,
         pass: env.EMAIL_PASS,
       },
+      connectionTimeout: 15_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 15_000,
+      logger: env.NODE_ENV === 'development',
+      debug: env.NODE_ENV === 'development',
     })
   : nodemailer.createTransport({
       service: 'gmail',
