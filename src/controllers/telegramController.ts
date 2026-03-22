@@ -1,11 +1,19 @@
+import bcrypt from 'bcryptjs'
 import type { Request, Response } from 'express'
 
 import { env } from '../config/env.js'
 import { AppError, asyncHandler } from '../lib/errors.js'
 import { supabaseAdmin } from '../lib/supabase.js'
 import { notifyTenantTicketClosed, notifyTenantTicketReply, notifyTenantTicketStatusUpdated } from '../services/notificationService.js'
+import { createProperty, createTenant } from '../services/ownerService.js'
 import { reviewOwnerRentPaymentApproval } from '../services/rentPaymentService.js'
 import { replyToTicketAsOwner, updateTicketStatusAsOwner } from '../services/ticketThreadService.js'
+import {
+  type ConversationState,
+  clearConversation,
+  getConversation,
+  setConversation,
+} from '../services/telegramConversationService.js'
 import { linkTelegramChatFromStartToken } from '../services/telegramOnboardingService.js'
 import {
   answerTelegramCallbackQuery,
@@ -49,7 +57,12 @@ type CallbackAction =
   | { kind: 'prompt_rent_message'; approvalId: string; action: 'approve' | 'reject' }
   | { kind: 'rent_reject_template'; approvalId: string; reasonCode: 'proof' | 'amount' | 'cycle' }
   | { kind: 'ticket_list'; filter: TicketFilter; page: number }
-  | { kind: 'menu'; action: 'stats' | 'tickets' | 'tenants' | 'properties' | 'approvals' | 'portfolio' | 'help' | 'refresh' }
+  | { kind: 'menu'; action: 'stats' | 'tickets' | 'tenants' | 'properties' | 'approvals' | 'portfolio' | 'help' | 'refresh' | 'add_property' | 'add_tenant' }
+  | { kind: 'add_property_confirm'; confirm: boolean }
+  | { kind: 'add_tenant_select_property'; propertyId: string; propertyName: string }
+  | { kind: 'add_tenant_confirm'; confirm: boolean }
+  | { kind: 'add_property_skip_unit' }
+  | { kind: 'cancel_flow' }
 
 function readStartToken(text: string | undefined): string | null {
   if (typeof text !== 'string') {
@@ -101,6 +114,21 @@ function isBareStartCommand(text: string | undefined): boolean {
   }
 
   return /^\/start(?:@[a-z0-9_]+)?$/i.test(text.trim())
+}
+
+function isAddPropertyCommand(text: string | undefined): boolean {
+  if (typeof text !== 'string') return false
+  return /^\/addproperty(?:@[a-z0-9_]+)?$/i.test(text.trim())
+}
+
+function isAddTenantCommand(text: string | undefined): boolean {
+  if (typeof text !== 'string') return false
+  return /^\/addtenant(?:@[a-z0-9_]+)?$/i.test(text.trim())
+}
+
+function isCancelCommand(text: string | undefined): boolean {
+  if (typeof text !== 'string') return false
+  return /^\/cancel(?:@[a-z0-9_]+)?$/i.test(text.trim())
 }
 
 function parseReplyCommand(text: string | undefined): { ticketId: string; message: string } | null {
@@ -172,7 +200,7 @@ function parseCallbackData(data: string | undefined): CallbackAction | null {
     }
   }
 
-  const menuMatched = data.match(/^mn\|(stats|tickets|tenants|properties|approvals|portfolio|help|refresh)$/i)
+  const menuMatched = data.match(/^mn\|(stats|tickets|tenants|properties|approvals|portfolio|help|refresh|add_property|add_tenant)$/i)
   if (menuMatched) {
     return {
       kind: 'menu',
@@ -184,7 +212,9 @@ function parseCallbackData(data: string | undefined): CallbackAction | null {
         | 'approvals'
         | 'portfolio'
         | 'help'
-        | 'refresh',
+        | 'refresh'
+        | 'add_property'
+        | 'add_tenant',
     }
   }
 
@@ -204,6 +234,31 @@ function parseCallbackData(data: string | undefined): CallbackAction | null {
       approvalId: rejectTemplateMatched[1],
       reasonCode: rejectTemplateMatched[2].toLowerCase() as 'proof' | 'amount' | 'cycle',
     }
+  }
+
+  if (data === 'apc|yes' || data === 'apc|no') {
+    return { kind: 'add_property_confirm', confirm: data === 'apc|yes' }
+  }
+
+  if (data === 'ap|skip_unit') {
+    return { kind: 'add_property_skip_unit' }
+  }
+
+  const tenantPropertyMatched = data.match(/^atp\|([a-f0-9-]{36})\|(.+)$/i)
+  if (tenantPropertyMatched) {
+    return {
+      kind: 'add_tenant_select_property',
+      propertyId: tenantPropertyMatched[1],
+      propertyName: tenantPropertyMatched[2],
+    }
+  }
+
+  if (data === 'atc|yes' || data === 'atc|no') {
+    return { kind: 'add_tenant_confirm', confirm: data === 'atc|yes' }
+  }
+
+  if (data === 'flow|cancel') {
+    return { kind: 'cancel_flow' }
   }
 
   return null
@@ -237,6 +292,10 @@ function ownerMainMenuReplyMarkup() {
         { text: '💸 Approvals', callback_data: 'mn|approvals' },
         { text: '📈 Portfolio', callback_data: 'mn|portfolio' },
       ],
+      [
+        { text: '➕ Add Property', callback_data: 'mn|add_property' },
+        { text: '➕ Add Tenant', callback_data: 'mn|add_tenant' },
+      ],
       [{ text: '🔄 Refresh', callback_data: 'mn|refresh' }, { text: '❓ Help', callback_data: 'mn|help' }],
     ],
   }
@@ -253,8 +312,10 @@ async function sendOwnerMainMenu(input: { chatId: string; organizationId: string
       '/reply <ticket-id> <message>',
       '/approve <approval-id> [message]',
       '/reject <approval-id> <reason>',
+      '/addproperty — Add a new property',
+      '/addtenant — Add a new tenant',
       '',
-      'Tip: Tickets/approvals are best handled using buttons below.',
+      'Tip: Use the buttons below or type commands directly.',
     ].join('\n'),
     replyMarkup: ownerMainMenuReplyMarkup(),
     logContext: {
@@ -573,10 +634,515 @@ async function sendOwnerPortfolioSnapshot(input: { chatId: string; organizationI
   })
 }
 
+// ── Add Property Wizard ──
+
+async function startAddPropertyFlow(input: { chatId: string; organizationId: string; ownerId: string }) {
+  setConversation(input.chatId, {
+    flow: 'add_property',
+    organizationId: input.organizationId,
+    ownerId: input.ownerId,
+    step: 'property_name',
+    data: {},
+  })
+
+  await sendTelegramMessageWithRetry({
+    chatId: input.chatId,
+    text: '🏠 Add New Property\n\nStep 1/3: Enter the property name:',
+    replyMarkup: {
+      inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'flow|cancel' }]],
+    },
+    logContext: {
+      organizationId: input.organizationId,
+      ownerId: input.ownerId,
+      userRole: 'owner',
+      eventType: 'telegram_add_property_start',
+    },
+  })
+}
+
+async function processAddPropertyStep(input: { chatId: string; text: string }) {
+  const conv = getConversation(input.chatId)
+  if (!conv || conv.flow !== 'add_property') return false
+
+  const { organizationId, ownerId } = conv
+
+  if (conv.step === 'property_name') {
+    const name = input.text.trim()
+    if (name.length < 1 || name.length > 200) {
+      await sendTelegramMessageWithRetry({
+        chatId: input.chatId,
+        text: '⚠️ Property name must be between 1 and 200 characters. Try again:',
+        logContext: { userRole: 'owner', eventType: 'telegram_add_property_validation' },
+      })
+      return true
+    }
+
+    conv.data.property_name = name
+    conv.step = 'address'
+    setConversation(input.chatId, conv)
+
+    await sendTelegramMessageWithRetry({
+      chatId: input.chatId,
+      text: `✅ Property name: ${name}\n\nStep 2/3: Enter the address:`,
+      replyMarkup: {
+        inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'flow|cancel' }]],
+      },
+      logContext: { organizationId, ownerId, userRole: 'owner', eventType: 'telegram_add_property_step' },
+    })
+    return true
+  }
+
+  if (conv.step === 'address') {
+    const address = input.text.trim()
+    if (address.length < 1 || address.length > 400) {
+      await sendTelegramMessageWithRetry({
+        chatId: input.chatId,
+        text: '⚠️ Address must be between 1 and 400 characters. Try again:',
+        logContext: { userRole: 'owner', eventType: 'telegram_add_property_validation' },
+      })
+      return true
+    }
+
+    conv.data.address = address
+    conv.step = 'unit_number'
+    setConversation(input.chatId, conv)
+
+    await sendTelegramMessageWithRetry({
+      chatId: input.chatId,
+      text: `✅ Address: ${address}\n\nStep 3/3: Enter unit number (or tap Skip):`,
+      replyMarkup: {
+        inline_keyboard: [
+          [{ text: '⏭ Skip', callback_data: 'ap|skip_unit' }],
+          [{ text: '❌ Cancel', callback_data: 'flow|cancel' }],
+        ],
+      },
+      logContext: { organizationId, ownerId, userRole: 'owner', eventType: 'telegram_add_property_step' },
+    })
+    return true
+  }
+
+  if (conv.step === 'unit_number') {
+    const unit = input.text.trim()
+    if (unit.length > 50) {
+      await sendTelegramMessageWithRetry({
+        chatId: input.chatId,
+        text: '⚠️ Unit number must be 50 characters or less. Try again:',
+        logContext: { userRole: 'owner', eventType: 'telegram_add_property_validation' },
+      })
+      return true
+    }
+
+    conv.data.unit_number = unit
+    conv.step = 'confirm'
+    setConversation(input.chatId, conv)
+
+    await sendAddPropertyConfirmation(input.chatId, conv)
+    return true
+  }
+
+  return false
+}
+
+async function sendAddPropertyConfirmation(chatId: string, conv: ConversationState & { flow: 'add_property' }) {
+  const summary = [
+    '📋 Review Property Details:',
+    `• Name: ${conv.data.property_name}`,
+    `• Address: ${conv.data.address}`,
+    conv.data.unit_number ? `• Unit: ${conv.data.unit_number}` : '• Unit: (none)',
+    '',
+    'Confirm to create this property?',
+  ].join('\n')
+
+  await sendTelegramMessageWithRetry({
+    chatId,
+    text: summary,
+    replyMarkup: {
+      inline_keyboard: [
+        [
+          { text: '✅ Confirm', callback_data: 'apc|yes' },
+          { text: '❌ Cancel', callback_data: 'apc|no' },
+        ],
+      ],
+    },
+    logContext: {
+      organizationId: conv.organizationId,
+      ownerId: conv.ownerId,
+      userRole: 'owner',
+      eventType: 'telegram_add_property_confirm_prompt',
+    },
+  })
+}
+
+async function finalizeAddProperty(chatId: string) {
+  const conv = getConversation(chatId)
+  if (!conv || conv.flow !== 'add_property' || conv.step !== 'confirm') return
+
+  const { organizationId, ownerId } = conv
+
+  const property = await createProperty({
+    ownerId,
+    organizationId,
+    input: {
+      property_name: conv.data.property_name!,
+      address: conv.data.address!,
+      unit_number: conv.data.unit_number,
+    },
+  })
+
+  clearConversation(chatId)
+
+  await sendTelegramMessageWithRetry({
+    chatId,
+    text: [
+      '🎉 Property created successfully!',
+      `• Name: ${property.property_name}`,
+      `• Address: ${property.address}`,
+      property.unit_number ? `• Unit: ${property.unit_number}` : '',
+      `• ID: ${property.id}`,
+    ]
+      .filter(Boolean)
+      .join('\n'),
+    replyMarkup: ownerMainMenuReplyMarkup(),
+    logContext: {
+      organizationId,
+      ownerId,
+      userRole: 'owner',
+      eventType: 'telegram_add_property_success',
+      metadata: { property_id: property.id },
+    },
+  })
+}
+
+// ── Add Tenant Wizard ──
+
+async function startAddTenantFlow(input: { chatId: string; organizationId: string; ownerId: string }) {
+  // Check if owner has any properties first
+  const { data: properties, error } = await supabaseAdmin
+    .from('properties')
+    .select('id, property_name, unit_number')
+    .eq('organization_id', input.organizationId)
+    .eq('owner_id', input.ownerId)
+    .order('created_at', { ascending: false })
+    .limit(20)
+
+  if (error || !properties || properties.length === 0) {
+    await sendTelegramMessageWithRetry({
+      chatId: input.chatId,
+      text: '⚠️ You need at least one property before adding a tenant. Use /addproperty first.',
+      logContext: {
+        organizationId: input.organizationId,
+        ownerId: input.ownerId,
+        userRole: 'owner',
+        eventType: 'telegram_add_tenant_no_properties',
+      },
+    })
+    return
+  }
+
+  setConversation(input.chatId, {
+    flow: 'add_tenant',
+    organizationId: input.organizationId,
+    ownerId: input.ownerId,
+    step: 'full_name',
+    data: {},
+  })
+
+  await sendTelegramMessageWithRetry({
+    chatId: input.chatId,
+    text: '👤 Add New Tenant\n\nStep 1/6: Enter the tenant\'s full name:',
+    replyMarkup: {
+      inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'flow|cancel' }]],
+    },
+    logContext: {
+      organizationId: input.organizationId,
+      ownerId: input.ownerId,
+      userRole: 'owner',
+      eventType: 'telegram_add_tenant_start',
+    },
+  })
+}
+
+async function processAddTenantStep(input: { chatId: string; text: string }) {
+  const conv = getConversation(input.chatId)
+  if (!conv || conv.flow !== 'add_tenant') return false
+
+  const { organizationId, ownerId } = conv
+  const logCtx = { organizationId, ownerId, userRole: 'owner' as const }
+
+  if (conv.step === 'full_name') {
+    const name = input.text.trim()
+    if (name.length < 1 || name.length > 200) {
+      await sendTelegramMessageWithRetry({
+        chatId: input.chatId,
+        text: '⚠️ Name must be between 1 and 200 characters. Try again:',
+        logContext: { ...logCtx, eventType: 'telegram_add_tenant_validation' },
+      })
+      return true
+    }
+
+    conv.data.full_name = name
+    conv.step = 'email'
+    setConversation(input.chatId, conv)
+
+    await sendTelegramMessageWithRetry({
+      chatId: input.chatId,
+      text: `✅ Name: ${name}\n\nStep 2/6: Enter tenant's email (or type "skip"):`,
+      replyMarkup: {
+        inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'flow|cancel' }]],
+      },
+      logContext: { ...logCtx, eventType: 'telegram_add_tenant_step' },
+    })
+    return true
+  }
+
+  if (conv.step === 'email') {
+    const email = input.text.trim().toLowerCase()
+    if (email !== 'skip' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      await sendTelegramMessageWithRetry({
+        chatId: input.chatId,
+        text: '⚠️ Invalid email format. Enter a valid email or type "skip":',
+        logContext: { ...logCtx, eventType: 'telegram_add_tenant_validation' },
+      })
+      return true
+    }
+
+    conv.data.email = email === 'skip' ? undefined : email
+    conv.step = 'phone'
+    setConversation(input.chatId, conv)
+
+    await sendTelegramMessageWithRetry({
+      chatId: input.chatId,
+      text: `✅ Email: ${email === 'skip' ? '(skipped)' : email}\n\nStep 3/6: Enter tenant's phone number (or type "skip"):`,
+      replyMarkup: {
+        inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'flow|cancel' }]],
+      },
+      logContext: { ...logCtx, eventType: 'telegram_add_tenant_step' },
+    })
+    return true
+  }
+
+  if (conv.step === 'phone') {
+    const phone = input.text.trim()
+    if (phone.toLowerCase() !== 'skip' && phone.length > 30) {
+      await sendTelegramMessageWithRetry({
+        chatId: input.chatId,
+        text: '⚠️ Phone number must be 30 characters or less. Try again or type "skip":',
+        logContext: { ...logCtx, eventType: 'telegram_add_tenant_validation' },
+      })
+      return true
+    }
+
+    conv.data.phone = phone.toLowerCase() === 'skip' ? undefined : phone
+    conv.step = 'select_property'
+    setConversation(input.chatId, conv)
+
+    // Show property selection buttons
+    const { data: properties } = await supabaseAdmin
+      .from('properties')
+      .select('id, property_name, unit_number')
+      .eq('organization_id', organizationId)
+      .eq('owner_id', ownerId)
+      .order('created_at', { ascending: false })
+      .limit(20)
+
+    const propertyButtons = (properties ?? []).map((p) => [
+      {
+        text: `${p.property_name}${p.unit_number ? ` (${p.unit_number})` : ''}`,
+        callback_data: `atp|${p.id}|${p.property_name.slice(0, 30)}`,
+      },
+    ])
+
+    await sendTelegramMessageWithRetry({
+      chatId: input.chatId,
+      text: `✅ Phone: ${phone.toLowerCase() === 'skip' ? '(skipped)' : phone}\n\nStep 4/6: Select a property for this tenant:`,
+      replyMarkup: {
+        inline_keyboard: [...propertyButtons, [{ text: '❌ Cancel', callback_data: 'flow|cancel' }]],
+      },
+      logContext: { ...logCtx, eventType: 'telegram_add_tenant_select_property' },
+    })
+    return true
+  }
+
+  if (conv.step === 'password') {
+    const password = input.text.trim()
+    if (password.length < 8) {
+      await sendTelegramMessageWithRetry({
+        chatId: input.chatId,
+        text: '⚠️ Password must be at least 8 characters. Try again:',
+        logContext: { ...logCtx, eventType: 'telegram_add_tenant_validation' },
+      })
+      return true
+    }
+
+    conv.data.password = password
+    conv.step = 'monthly_rent'
+    setConversation(input.chatId, conv)
+
+    await sendTelegramMessageWithRetry({
+      chatId: input.chatId,
+      text: '✅ Password set.\n\nStep 5/6: Enter the monthly rent amount (number):',
+      replyMarkup: {
+        inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'flow|cancel' }]],
+      },
+      logContext: { ...logCtx, eventType: 'telegram_add_tenant_step' },
+    })
+    return true
+  }
+
+  if (conv.step === 'monthly_rent') {
+    const rent = Number(input.text.trim())
+    if (Number.isNaN(rent) || rent < 0) {
+      await sendTelegramMessageWithRetry({
+        chatId: input.chatId,
+        text: '⚠️ Please enter a valid non-negative number for rent:',
+        logContext: { ...logCtx, eventType: 'telegram_add_tenant_validation' },
+      })
+      return true
+    }
+
+    conv.data.monthly_rent = rent
+    conv.step = 'payment_due_day'
+    setConversation(input.chatId, conv)
+
+    await sendTelegramMessageWithRetry({
+      chatId: input.chatId,
+      text: `✅ Monthly rent: ${rent}\n\nStep 6/6: Enter the payment due day (1-31):`,
+      replyMarkup: {
+        inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'flow|cancel' }]],
+      },
+      logContext: { ...logCtx, eventType: 'telegram_add_tenant_step' },
+    })
+    return true
+  }
+
+  if (conv.step === 'payment_due_day') {
+    const day = Number(input.text.trim())
+    if (!Number.isInteger(day) || day < 1 || day > 31) {
+      await sendTelegramMessageWithRetry({
+        chatId: input.chatId,
+        text: '⚠️ Payment due day must be a number between 1 and 31. Try again:',
+        logContext: { ...logCtx, eventType: 'telegram_add_tenant_validation' },
+      })
+      return true
+    }
+
+    conv.data.payment_due_day = day
+    conv.step = 'confirm'
+    setConversation(input.chatId, conv)
+
+    await sendAddTenantConfirmation(input.chatId, conv)
+    return true
+  }
+
+  return false
+}
+
+async function sendAddTenantConfirmation(chatId: string, conv: ConversationState & { flow: 'add_tenant' }) {
+  const summary = [
+    '📋 Review Tenant Details:',
+    `• Name: ${conv.data.full_name}`,
+    `• Email: ${conv.data.email ?? '(none)'}`,
+    `• Phone: ${conv.data.phone ?? '(none)'}`,
+    `• Property: ${conv.data.property_name}`,
+    `• Monthly Rent: ${conv.data.monthly_rent}`,
+    `• Payment Due Day: ${conv.data.payment_due_day}`,
+    '',
+    'Confirm to create this tenant?',
+  ].join('\n')
+
+  await sendTelegramMessageWithRetry({
+    chatId,
+    text: summary,
+    replyMarkup: {
+      inline_keyboard: [
+        [
+          { text: '✅ Confirm', callback_data: 'atc|yes' },
+          { text: '❌ Cancel', callback_data: 'atc|no' },
+        ],
+      ],
+    },
+    logContext: {
+      organizationId: conv.organizationId,
+      ownerId: conv.ownerId,
+      userRole: 'owner',
+      eventType: 'telegram_add_tenant_confirm_prompt',
+    },
+  })
+}
+
+async function finalizeAddTenant(chatId: string) {
+  const conv = getConversation(chatId)
+  if (!conv || conv.flow !== 'add_tenant' || conv.step !== 'confirm') return
+
+  const { organizationId, ownerId } = conv
+  const passwordHash = await bcrypt.hash(conv.data.password!, 10)
+
+  const tenant = await createTenant({
+    ownerId,
+    organizationId,
+    input: {
+      property_id: conv.data.property_id!,
+      full_name: conv.data.full_name!,
+      email: conv.data.email,
+      phone: conv.data.phone,
+      password_hash: passwordHash,
+      monthly_rent: conv.data.monthly_rent!,
+      payment_due_day: conv.data.payment_due_day!,
+    },
+  })
+
+  clearConversation(chatId)
+
+  await sendTelegramMessageWithRetry({
+    chatId,
+    text: [
+      '🎉 Tenant created successfully!',
+      `• Name: ${tenant.full_name}`,
+      `• Access ID: ${tenant.tenant_access_id}`,
+      `• Property: ${conv.data.property_name}`,
+      `• Monthly Rent: ${tenant.monthly_rent}`,
+      `• Payment Due Day: ${tenant.payment_due_day}`,
+      '',
+      `💡 Tenant can log in using Access ID: ${tenant.tenant_access_id}`,
+    ].join('\n'),
+    replyMarkup: ownerMainMenuReplyMarkup(),
+    logContext: {
+      organizationId,
+      ownerId,
+      userRole: 'owner',
+      eventType: 'telegram_add_tenant_success',
+      metadata: { tenant_id: tenant.id },
+    },
+  })
+}
+
+async function cancelActiveFlow(chatId: string) {
+  const conv = getConversation(chatId)
+  if (!conv) return false
+
+  clearConversation(chatId)
+
+  const flowLabel = conv.flow === 'add_property' ? 'Add Property' : 'Add Tenant'
+  await sendTelegramMessageWithRetry({
+    chatId,
+    text: `❌ ${flowLabel} cancelled.`,
+    replyMarkup: ownerMainMenuReplyMarkup(),
+    logContext: {
+      organizationId: conv.organizationId,
+      ownerId: conv.ownerId,
+      userRole: 'owner',
+      eventType: 'telegram_flow_cancelled',
+      metadata: { flow: conv.flow },
+    },
+  })
+
+  return true
+}
+
 async function processOwnerMenuAction(input: {
   chatId: string
   telegramUserId: string
-  action: 'stats' | 'tickets' | 'tenants' | 'properties' | 'approvals' | 'portfolio' | 'help' | 'refresh'
+  action: 'stats' | 'tickets' | 'tenants' | 'properties' | 'approvals' | 'portfolio' | 'help' | 'refresh' | 'add_property' | 'add_tenant'
 }) {
   const ownerLink = await resolveOwnerLinkFromTelegramIdentity({
     chatId: input.chatId,
@@ -622,6 +1188,24 @@ async function processOwnerMenuAction(input: {
 
   if (input.action === 'properties') {
     await sendOwnerPropertySnapshot({
+      chatId: input.chatId,
+      organizationId: ownerLink.organization_id,
+      ownerId: ownerLink.owner_id!,
+    })
+    return
+  }
+
+  if (input.action === 'add_property') {
+    await startAddPropertyFlow({
+      chatId: input.chatId,
+      organizationId: ownerLink.organization_id,
+      ownerId: ownerLink.owner_id!,
+    })
+    return
+  }
+
+  if (input.action === 'add_tenant') {
+    await startAddTenantFlow({
       chatId: input.chatId,
       organizationId: ownerLink.organization_id,
       ownerId: ownerLink.owner_id!,
@@ -807,10 +1391,19 @@ async function processHelpCommand(payload: TelegramWebhookUpdate['message']) {
     chatId: String(chatId),
     text: [
       '🤖 Prophives Bot Commands',
+      '',
+      '📊 View & Manage',
       '/ownerstats - View owner dashboard snapshot',
       '/reply <ticket-id> <message> - Reply to a ticket',
       '/approve <approval-id> [message] - Approve rent payment',
       '/reject <approval-id> <reason> - Reject rent payment',
+      '',
+      '➕ Create',
+      '/addproperty - Add a new property',
+      '/addtenant - Add a new tenant',
+      '/cancel - Cancel current operation',
+      '',
+      '⚙️ Account',
       '/disconnect - Stop Telegram alerts',
       '',
       '💡 Tip: You can also use inline buttons in alerts to update ticket status and rent approvals.',
@@ -1042,6 +1635,71 @@ async function processTicketStatusCallback(callback: NonNullable<TelegramWebhook
       return
     }
 
+    if (action.kind === 'add_property_confirm') {
+      if (action.confirm) {
+        await finalizeAddProperty(String(chatId))
+        await answerTelegramCallbackQuery({ callbackQueryId: callbackId, text: '✅ Property created!' })
+      } else {
+        await cancelActiveFlow(String(chatId))
+        await answerTelegramCallbackQuery({ callbackQueryId: callbackId, text: '❌ Cancelled.' })
+      }
+      return
+    }
+
+    if (action.kind === 'add_property_skip_unit') {
+      const conv = getConversation(String(chatId))
+      if (conv && conv.flow === 'add_property' && conv.step === 'unit_number') {
+        conv.step = 'confirm'
+        setConversation(String(chatId), conv)
+        await sendAddPropertyConfirmation(String(chatId), conv)
+        await answerTelegramCallbackQuery({ callbackQueryId: callbackId, text: 'Unit skipped.' })
+      }
+      return
+    }
+
+    if (action.kind === 'add_tenant_select_property') {
+      const conv = getConversation(String(chatId))
+      if (conv && conv.flow === 'add_tenant' && conv.step === 'select_property') {
+        conv.data.property_id = action.propertyId
+        conv.data.property_name = action.propertyName
+        conv.step = 'password'
+        setConversation(String(chatId), conv)
+
+        await sendTelegramMessageWithRetry({
+          chatId: String(chatId),
+          text: `✅ Property: ${action.propertyName}\n\nEnter a login password for this tenant (min 8 characters):`,
+          replyMarkup: {
+            inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'flow|cancel' }]],
+          },
+          logContext: {
+            organizationId: conv.organizationId,
+            ownerId: conv.ownerId,
+            userRole: 'owner',
+            eventType: 'telegram_add_tenant_step',
+          },
+        })
+        await answerTelegramCallbackQuery({ callbackQueryId: callbackId, text: 'Property selected.' })
+      }
+      return
+    }
+
+    if (action.kind === 'add_tenant_confirm') {
+      if (action.confirm) {
+        await finalizeAddTenant(String(chatId))
+        await answerTelegramCallbackQuery({ callbackQueryId: callbackId, text: '✅ Tenant created!' })
+      } else {
+        await cancelActiveFlow(String(chatId))
+        await answerTelegramCallbackQuery({ callbackQueryId: callbackId, text: '❌ Cancelled.' })
+      }
+      return
+    }
+
+    if (action.kind === 'cancel_flow') {
+      await cancelActiveFlow(String(chatId))
+      await answerTelegramCallbackQuery({ callbackQueryId: callbackId, text: '❌ Cancelled.' })
+      return
+    }
+
     if (action.kind !== 'prompt_rent_message') {
       throw new AppError('Unsupported callback action.', 400)
     }
@@ -1222,6 +1880,125 @@ export const postTelegramWebhook = asyncHandler(async (request: Request, respons
       response.json({ ok: true, help: false })
     }
     return
+  }
+
+  // ── Cancel active flow ──
+  if (isCancelCommand(text)) {
+    try {
+      const chatIdForCancel = payload.message?.chat?.id
+      if (chatIdForCancel !== undefined) {
+        const cancelled = await cancelActiveFlow(String(chatIdForCancel))
+        if (!cancelled) {
+          await sendTelegramMessageWithRetry({
+            chatId: String(chatIdForCancel),
+            text: 'ℹ️ No active operation to cancel.',
+            logContext: { userRole: 'system', eventType: 'telegram_cancel_no_flow' },
+          })
+        }
+      }
+      response.json({ ok: true, cancelled: true })
+    } catch (error) {
+      console.error('[telegram-cancel-command-failed]', { requestId: request.requestId, error })
+      response.json({ ok: true, cancelled: false })
+    }
+    return
+  }
+
+  // ── Add Property command ──
+  if (isAddPropertyCommand(text)) {
+    try {
+      const chatIdForAdd = payload.message?.chat?.id
+      const userIdForAdd = payload.message?.from?.id
+      if (chatIdForAdd !== undefined && userIdForAdd !== undefined) {
+        const ownerLink = await resolveOwnerLinkFromTelegramIdentity({
+          chatId: String(chatIdForAdd),
+          telegramUserId: String(userIdForAdd),
+        })
+        await startAddPropertyFlow({
+          chatId: String(chatIdForAdd),
+          organizationId: ownerLink.organization_id,
+          ownerId: ownerLink.owner_id!,
+        })
+      }
+      response.json({ ok: true, add_property_started: true })
+    } catch (error) {
+      console.error('[telegram-add-property-command-failed]', { requestId: request.requestId, error })
+      const chatIdForError = payload.message?.chat?.id
+      if (chatIdForError !== undefined) {
+        await sendTelegramMessageWithRetry({
+          chatId: String(chatIdForError),
+          text: error instanceof AppError ? error.message : 'Could not start Add Property. Make sure your Telegram is linked.',
+          logContext: { userRole: 'system', eventType: 'telegram_add_property_command_failed' },
+        })
+      }
+      response.json({ ok: true, add_property_started: false })
+    }
+    return
+  }
+
+  // ── Add Tenant command ──
+  if (isAddTenantCommand(text)) {
+    try {
+      const chatIdForAdd = payload.message?.chat?.id
+      const userIdForAdd = payload.message?.from?.id
+      if (chatIdForAdd !== undefined && userIdForAdd !== undefined) {
+        const ownerLink = await resolveOwnerLinkFromTelegramIdentity({
+          chatId: String(chatIdForAdd),
+          telegramUserId: String(userIdForAdd),
+        })
+        await startAddTenantFlow({
+          chatId: String(chatIdForAdd),
+          organizationId: ownerLink.organization_id,
+          ownerId: ownerLink.owner_id!,
+        })
+      }
+      response.json({ ok: true, add_tenant_started: true })
+    } catch (error) {
+      console.error('[telegram-add-tenant-command-failed]', { requestId: request.requestId, error })
+      const chatIdForError = payload.message?.chat?.id
+      if (chatIdForError !== undefined) {
+        await sendTelegramMessageWithRetry({
+          chatId: String(chatIdForError),
+          text: error instanceof AppError ? error.message : 'Could not start Add Tenant. Make sure your Telegram is linked.',
+          logContext: { userRole: 'system', eventType: 'telegram_add_tenant_command_failed' },
+        })
+      }
+      response.json({ ok: true, add_tenant_started: false })
+    }
+    return
+  }
+
+  // ── Handle active conversation flow (free-text input for wizards) ──
+  {
+    const chatIdForFlow = payload.message?.chat?.id
+    if (chatIdForFlow !== undefined && typeof text === 'string' && text.trim().length > 0) {
+      const activeConv = getConversation(String(chatIdForFlow))
+      if (activeConv) {
+        try {
+          let handled = false
+          if (activeConv.flow === 'add_property') {
+            handled = await processAddPropertyStep({ chatId: String(chatIdForFlow), text })
+          } else if (activeConv.flow === 'add_tenant') {
+            handled = await processAddTenantStep({ chatId: String(chatIdForFlow), text })
+          }
+          if (handled) {
+            response.json({ ok: true, flow_step_processed: true })
+            return
+          }
+        } catch (error) {
+          console.error('[telegram-flow-step-failed]', { requestId: request.requestId, error })
+          clearConversation(String(chatIdForFlow))
+          await sendTelegramMessageWithRetry({
+            chatId: String(chatIdForFlow),
+            text: error instanceof AppError ? error.message : '⚠️ Something went wrong. The operation was cancelled. Please try again.',
+            replyMarkup: ownerMainMenuReplyMarkup(),
+            logContext: { userRole: 'system', eventType: 'telegram_flow_step_error' },
+          })
+          response.json({ ok: true, flow_step_processed: false })
+          return
+        }
+      }
+    }
   }
 
   const startToken = readStartToken(text)
