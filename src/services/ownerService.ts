@@ -142,6 +142,34 @@ export async function getOwnerById(ownerId: string, organizationId?: string) {
   return data
 }
 
+export async function updateOwnerById(input: {
+  ownerId: string
+  organizationId?: string
+  patch: Partial<{
+    support_email: string | null
+    support_whatsapp: string | null
+  }>
+}) {
+  let request = supabaseAdmin
+    .from('owners')
+    .update({
+      ...input.patch,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', input.ownerId)
+
+  if (input.organizationId) {
+    request = request.eq('organization_id', input.organizationId)
+  }
+
+  const { data, error } = await request
+    .select('*, organizations(id, name, slug, plan_code, country_code, currency_code, created_at)')
+    .maybeSingle()
+
+  throwIfError(error, 'Failed to update owner profile')
+  return data
+}
+
 export async function createProperty(args: {
   ownerId: string
   organizationId: string

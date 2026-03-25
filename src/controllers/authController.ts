@@ -4,7 +4,7 @@ import type { Request, Response } from 'express'
 import { AppError, asyncHandler } from '../lib/errors.js'
 import { signOwnerToken, signTenantToken } from '../lib/jwt.js'
 import { createAnalyticsEvent } from '../services/analyticsService.js'
-import { findOwnerByEmail, createOwner, getOwnerById } from '../services/ownerService.js'
+import { findOwnerByEmail, createOwner, getOwnerById, updateOwnerById } from '../services/ownerService.js'
 import {
   requestOwnerPasswordReset,
   requestTenantPasswordReset,
@@ -16,6 +16,7 @@ import {
   ownerForgotPasswordSchema,
   ownerLoginSchema,
   ownerRegisterSchema,
+  ownerUpdateMeSchema,
   passwordResetConfirmSchema,
   tenantForgotPasswordSchema,
   tenantLoginSchema,
@@ -156,6 +157,66 @@ export const ownerMe = asyncHandler(async (request: Request, response: Response)
   }
 
   const owner = await getOwnerById(ownerId, request.owner?.organizationId)
+  if (!owner) {
+    throw new AppError('Owner not found', 404)
+  }
+
+  response.json({
+    ok: true,
+    owner: {
+      id: owner.id,
+      email: owner.email,
+      full_name: owner.full_name,
+      company_name: owner.company_name,
+      support_email: owner.support_email,
+      support_whatsapp: owner.support_whatsapp,
+      organization_id: owner.organization_id,
+      organization: owner.organizations
+        ? {
+            id: owner.organizations.id,
+            name: owner.organizations.name,
+            slug: owner.organizations.slug,
+            plan_code: owner.organizations.plan_code,
+            country_code: owner.organizations.country_code,
+            currency_code: owner.organizations.currency_code,
+            created_at: owner.organizations.created_at,
+          }
+        : null,
+      created_at: owner.created_at,
+    },
+  })
+})
+
+export const patchOwnerMe = asyncHandler(async (request: Request, response: Response) => {
+  const ownerId = request.owner?.ownerId
+  if (!ownerId) {
+    throw new AppError('Owner authentication required', 401)
+  }
+
+  const parsed = ownerUpdateMeSchema.parse(request.body ?? {})
+  const patch: Partial<{
+    support_email: string | null
+    support_whatsapp: string | null
+  }> = {}
+
+  if (Object.prototype.hasOwnProperty.call(parsed, 'support_email')) {
+    patch.support_email = parsed.support_email ?? null
+  }
+
+  if (Object.prototype.hasOwnProperty.call(parsed, 'support_whatsapp')) {
+    patch.support_whatsapp = parsed.support_whatsapp ?? null
+  }
+
+  if (Object.keys(patch).length === 0) {
+    throw new AppError('No profile fields provided to update', 400)
+  }
+
+  const owner = await updateOwnerById({
+    ownerId,
+    organizationId: request.owner?.organizationId,
+    patch,
+  })
+
   if (!owner) {
     throw new AppError('Owner not found', 404)
   }

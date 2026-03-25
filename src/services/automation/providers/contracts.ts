@@ -101,6 +101,7 @@ export interface WhatsAppProvider {
   handleWebhookEvent(input: {
     headers: Record<string, string | undefined>
     body: unknown
+    rawBody?: Buffer | null
     requestId?: string | null
   }): Promise<WhatsAppWebhookEventResult>
 }

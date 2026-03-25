@@ -18,6 +18,19 @@ export const ownerLoginSchema = z.object({
   password: z.string().min(1),
 })
 
+export const ownerUpdateMeSchema = z
+  .object({
+    support_email: z
+      .union([z.string().email(), z.null()])
+      .optional()
+      .transform((value) => (typeof value === 'string' ? value.trim().toLowerCase() : value)),
+    support_whatsapp: z
+      .union([z.string().trim().min(5).max(30), z.literal(''), z.null()])
+      .optional()
+      .transform((value) => (value === '' ? null : value)),
+  })
+  .strict()
+
 export const tenantLoginSchema = z
   .object({
     tenant_access_id: z.string().trim().min(4),

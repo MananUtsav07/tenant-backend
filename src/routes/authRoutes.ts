@@ -4,6 +4,7 @@ import {
   loginOwner,
   loginTenant,
   ownerMe,
+  patchOwnerMe,
   postOwnerForgotPassword,
   postOwnerResetPassword,
   postTenantForgotPassword,
@@ -22,6 +23,7 @@ export function createAuthRouter() {
   router.post('/owner/forgot-password', postOwnerForgotPassword)
   router.post('/owner/reset-password', postOwnerResetPassword)
   router.get('/owner/me', requireOwnerAuth, ownerMe)
+  router.patch('/owner/me', requireOwnerAuth, patchOwnerMe)
 
   router.post('/tenant/login', loginTenant)
   router.post('/tenant/forgot-password', postTenantForgotPassword)

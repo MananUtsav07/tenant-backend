@@ -7,6 +7,7 @@ import { supabaseAdmin } from '../../../lib/supabase.js'
 import { recordAutomationError } from '../core/runLogger.js'
 import { recordIntegrationEvent, updateIntegrationEvent } from '../integrationEventService.js'
 import { resolveAutomationMessageTemplate } from '../messageTemplateService.js'
+import { processWhatsAppOwnerBotMessage } from '../../whatsappBotService.js'
 import type {
   ProviderResult,
   WhatsAppActionMessageInput,
@@ -73,6 +74,113 @@ function providerName() {
 
 function isStubProviderEnabled() {
   return env.WHATSAPP_PROVIDER === 'stub'
+}
+
+function isMetaProviderEnabled() {
+  return env.WHATSAPP_PROVIDER === 'meta'
+}
+
+function normalizeGraphVersion(value: string | null) {
+  if (!value) {
+    return 'v22.0'
+  }
+
+  const trimmed = value.trim()
+  return /^v\d+\.\d+$/.test(trimmed) ? trimmed : 'v22.0'
+}
+
+type MetaOutboundResponse = {
+  messages?: Array<{
+    id?: string
+    message_status?: string
+  }>
+  contacts?: Array<{
+    wa_id?: string
+  }>
+}
+
+type MetaConfig = {
+  accessToken: string
+  phoneNumberId: string
+  appSecret: string | null
+  graphVersion: string
+}
+
+function getMetaConfig(): MetaConfig | null {
+  if (!isMetaProviderEnabled()) {
+    return null
+  }
+
+  const accessToken = env.WHATSAPP_ACCESS_TOKEN ?? null
+  const phoneNumberId = env.WHATSAPP_PHONE_NUMBER_ID ?? null
+  if (!accessToken || !phoneNumberId) {
+    return null
+  }
+
+  return {
+    accessToken,
+    phoneNumberId,
+    appSecret: env.WHATSAPP_APP_SECRET ?? null,
+    graphVersion: normalizeGraphVersion(process.env.WHATSAPP_GRAPH_API_VERSION ?? null),
+  }
+}
+
+function buildMetaEndpoint(config: MetaConfig) {
+  return `https://graph.facebook.com/${config.graphVersion}/${config.phoneNumberId}/messages`
+}
+
+async function postMetaMessage(input: {
+  config: MetaConfig
+  payload: Record<string, unknown>
+}): Promise<MetaOutboundResponse> {
+  const response = await fetch(buildMetaEndpoint(input.config), {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${input.config.accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(input.payload),
+  })
+
+  const responseText = await response.text()
+  let responseJson: Record<string, unknown> | null = null
+  if (responseText.trim().length > 0) {
+    try {
+      responseJson = JSON.parse(responseText) as Record<string, unknown>
+    } catch {
+      responseJson = null
+    }
+  }
+
+  if (!response.ok) {
+    throw new AppError('Meta WhatsApp API request failed', 502, responseJson ?? responseText)
+  }
+
+  return (responseJson ?? {}) as MetaOutboundResponse
+}
+
+function toMetaButtonTitle(label: string, fallback: string) {
+  const trimmed = label.trim()
+  if (!trimmed) {
+    return fallback
+  }
+
+  return trimmed.length > 20 ? trimmed.slice(0, 20) : trimmed
+}
+
+function isValidMetaSignature(input: { appSecret: string; rawBody: Buffer; providedSignature: string | null }) {
+  if (!input.providedSignature || !input.providedSignature.startsWith('sha256=')) {
+    return false
+  }
+
+  const expected = `sha256=${crypto.createHmac('sha256', input.appSecret).update(input.rawBody).digest('hex')}`
+  const received = input.providedSignature
+
+  if (expected.length !== received.length) {
+    return false
+  }
+
+  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(received))
 }
 
 function mapDeliveryStatus(value: string | null | undefined): DeliveryUpdateStatus | null {
@@ -404,6 +512,10 @@ function extractMetaWebhookEvents(body: Record<string, unknown>): WhatsAppInboun
             text: readString(readObject(message.text)?.body),
             button_reply_id: readString(readObject(readObject(message.interactive)?.button_reply)?.id),
             button_reply_title: readString(readObject(readObject(message.interactive)?.button_reply)?.title),
+            list_reply_id: readString(readObject(readObject(message.interactive)?.list_reply)?.id),
+            list_reply_title: readString(readObject(readObject(message.interactive)?.list_reply)?.title),
+            button_payload: readString(readObject(message.button)?.payload),
+            button_text: readString(readObject(message.button)?.text),
           },
         })
       }
@@ -460,6 +572,43 @@ function extractWebhookEvents(body: unknown): WhatsAppInboundEvent[] {
       normalizedPayload: root,
     },
   ]
+}
+
+function extractInboundMessageText(event: WhatsAppInboundEvent): string | null {
+  const normalized = readObject(event.normalizedPayload ?? null)
+  if (normalized) {
+    const text = readString(normalized.text)
+    if (text) {
+      return text
+    }
+
+    const buttonReplyId = readString(normalized.button_reply_id)
+    if (buttonReplyId) {
+      return buttonReplyId
+    }
+
+    const buttonPayload = readString(normalized.button_payload)
+    if (buttonPayload) {
+      return buttonPayload
+    }
+
+    const listReplyId = readString(normalized.list_reply_id)
+    if (listReplyId) {
+      return listReplyId
+    }
+  }
+
+  const payload = readObject(event.payload)
+  if (!payload) {
+    return null
+  }
+
+  return (
+    readString(readObject(payload.text)?.body) ??
+    readString(readObject(readObject(payload.interactive)?.button_reply)?.id) ??
+    readString(readObject(readObject(payload.interactive)?.list_reply)?.id) ??
+    readString(readObject(payload.button)?.payload)
+  )
 }
 
 async function sendViaStub(input: {
@@ -554,7 +703,82 @@ export class DefaultWhatsAppProvider implements WhatsAppProvider {
       }
     }
 
-    if (!isStubProviderEnabled()) {
+    let providerMessageId: string | null = null
+    let providerPayload: Record<string, unknown> = {}
+
+    if (isMetaProviderEnabled()) {
+      const config = getMetaConfig()
+      if (!config) {
+        await updateOutboundDelivery({
+          deliveryId: delivery.id,
+          integrationEventId: delivery.integration_event_id,
+          status: 'skipped',
+          lastError: 'meta_provider_missing_configuration',
+        })
+        return {
+          provider: providerName(),
+          status: 'skipped',
+          reason: 'meta_provider_missing_configuration',
+          metadata: { delivery_id: delivery.id },
+        }
+      }
+
+      try {
+        const response = await postMetaMessage({
+          config,
+          payload: {
+            messaging_product: 'whatsapp',
+            to: normalizeRecipient(recipient).e164 ?? recipient,
+            type: 'template',
+            template: {
+              name: input.templateKey,
+              language: { code: input.language ?? 'en_US' },
+            },
+          },
+        })
+
+        providerMessageId = readString(response.messages?.[0]?.id)
+        providerPayload = response as unknown as Record<string, unknown>
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'meta_template_send_failed'
+        await updateOutboundDelivery({
+          deliveryId: delivery.id,
+          integrationEventId: delivery.integration_event_id,
+          status: 'failed',
+          lastError: errorMessage,
+        })
+        await recordOutboundFailure({
+          organizationId: input.organizationId,
+          ownerId: input.ownerId,
+          automationJobId: input.automationJobId,
+          flowName: input.flowName,
+          errorMessage,
+          context: {
+            recipient,
+            template_key: input.templateKey,
+            delivery_id: delivery.id,
+          },
+        })
+        return {
+          provider: providerName(),
+          status: 'failed',
+          reason: errorMessage,
+          metadata: { delivery_id: delivery.id },
+        }
+      }
+    } else if (isStubProviderEnabled()) {
+      providerMessageId = await sendViaStub({
+        deliveryId: delivery.id,
+        integrationEventId: delivery.integration_event_id,
+        mode: 'template',
+        recipient,
+        preview: renderedBody,
+        providerPayload: {
+          template_key: input.templateKey,
+          template_source: resolved.source,
+        },
+      })
+    } else {
       await updateOutboundDelivery({
         deliveryId: delivery.id,
         integrationEventId: delivery.integration_event_id,
@@ -569,22 +793,20 @@ export class DefaultWhatsAppProvider implements WhatsAppProvider {
       }
     }
 
-    const providerMessageId = await sendViaStub({
-      deliveryId: delivery.id,
-      integrationEventId: delivery.integration_event_id,
-      mode: 'template',
-      recipient,
-      preview: renderedBody,
-      providerPayload: {
-        template_key: input.templateKey,
-        template_source: resolved.source,
-      },
-    })
+    if (!isStubProviderEnabled()) {
+      await updateOutboundDelivery({
+        deliveryId: delivery.id,
+        integrationEventId: delivery.integration_event_id,
+        status: 'sent',
+        providerMessageId: providerMessageId ?? undefined,
+        providerPayload,
+      })
+    }
 
     return {
       provider: providerName(),
       status: 'sent',
-      externalId: providerMessageId,
+      externalId: providerMessageId ?? undefined,
       metadata: {
         delivery_id: delivery.id,
         policy_mode: 'template',
@@ -638,7 +860,77 @@ export class DefaultWhatsAppProvider implements WhatsAppProvider {
       }
     }
 
-    if (!isStubProviderEnabled()) {
+    let providerMessageId: string | null = null
+    let providerPayload: Record<string, unknown> = {}
+
+    if (isMetaProviderEnabled()) {
+      const config = getMetaConfig()
+      if (!config) {
+        await updateOutboundDelivery({
+          deliveryId: delivery.id,
+          integrationEventId: delivery.integration_event_id,
+          status: 'skipped',
+          lastError: 'meta_provider_missing_configuration',
+        })
+        return {
+          provider: providerName(),
+          status: 'skipped',
+          reason: 'meta_provider_missing_configuration',
+          metadata: { delivery_id: delivery.id },
+        }
+      }
+
+      try {
+        const response = await postMetaMessage({
+          config,
+          payload: {
+            messaging_product: 'whatsapp',
+            to: normalizeRecipient(recipient).e164 ?? recipient,
+            type: 'text',
+            text: {
+              body: text,
+              preview_url: false,
+            },
+          },
+        })
+
+        providerMessageId = readString(response.messages?.[0]?.id)
+        providerPayload = response as unknown as Record<string, unknown>
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'meta_freeform_send_failed'
+        await updateOutboundDelivery({
+          deliveryId: delivery.id,
+          integrationEventId: delivery.integration_event_id,
+          status: 'failed',
+          lastError: errorMessage,
+        })
+        await recordOutboundFailure({
+          organizationId: input.organizationId,
+          ownerId: input.ownerId,
+          automationJobId: input.automationJobId,
+          flowName: input.flowName,
+          errorMessage,
+          context: {
+            recipient,
+            delivery_id: delivery.id,
+          },
+        })
+        return {
+          provider: providerName(),
+          status: 'failed',
+          reason: errorMessage,
+          metadata: { delivery_id: delivery.id },
+        }
+      }
+    } else if (isStubProviderEnabled()) {
+      providerMessageId = await sendViaStub({
+        deliveryId: delivery.id,
+        integrationEventId: delivery.integration_event_id,
+        mode: 'freeform',
+        recipient,
+        preview: text,
+      })
+    } else {
       await updateOutboundDelivery({
         deliveryId: delivery.id,
         integrationEventId: delivery.integration_event_id,
@@ -653,18 +945,20 @@ export class DefaultWhatsAppProvider implements WhatsAppProvider {
       }
     }
 
-    const providerMessageId = await sendViaStub({
-      deliveryId: delivery.id,
-      integrationEventId: delivery.integration_event_id,
-      mode: 'freeform',
-      recipient,
-      preview: text,
-    })
+    if (!isStubProviderEnabled()) {
+      await updateOutboundDelivery({
+        deliveryId: delivery.id,
+        integrationEventId: delivery.integration_event_id,
+        status: 'sent',
+        providerMessageId: providerMessageId ?? undefined,
+        providerPayload,
+      })
+    }
 
     return {
       provider: providerName(),
       status: 'sent',
-      externalId: providerMessageId,
+      externalId: providerMessageId ?? undefined,
       metadata: {
         delivery_id: delivery.id,
         policy_mode: 'session',
@@ -722,7 +1016,92 @@ export class DefaultWhatsAppProvider implements WhatsAppProvider {
       }
     }
 
-    if (!isStubProviderEnabled()) {
+    let providerMessageId: string | null = null
+    let providerPayload: Record<string, unknown> = {}
+
+    if (isMetaProviderEnabled()) {
+      const config = getMetaConfig()
+      if (!config) {
+        await updateOutboundDelivery({
+          deliveryId: delivery.id,
+          integrationEventId: delivery.integration_event_id,
+          status: 'skipped',
+          lastError: 'meta_provider_missing_configuration',
+        })
+        return {
+          provider: providerName(),
+          status: 'skipped',
+          reason: 'meta_provider_missing_configuration',
+          metadata: { delivery_id: delivery.id },
+        }
+      }
+
+      try {
+        const response = await postMetaMessage({
+          config,
+          payload: {
+            messaging_product: 'whatsapp',
+            to: normalizeRecipient(recipient).e164 ?? recipient,
+            type: 'interactive',
+            interactive: {
+              type: 'button',
+              ...(input.title ? { header: { type: 'text', text: input.title.slice(0, 60) } } : {}),
+              body: { text: body },
+              ...(input.footer ? { footer: { text: input.footer.slice(0, 60) } } : {}),
+              action: {
+                buttons: input.actions.slice(0, 3).map((action, index) => ({
+                  type: 'reply',
+                  reply: {
+                    id: action.id.slice(0, 256),
+                    title: toMetaButtonTitle(action.label, `Option ${index + 1}`),
+                  },
+                })),
+              },
+            },
+          },
+        })
+
+        providerMessageId = readString(response.messages?.[0]?.id)
+        providerPayload = response as unknown as Record<string, unknown>
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'meta_action_send_failed'
+        await updateOutboundDelivery({
+          deliveryId: delivery.id,
+          integrationEventId: delivery.integration_event_id,
+          status: 'failed',
+          lastError: errorMessage,
+        })
+        await recordOutboundFailure({
+          organizationId: input.organizationId,
+          ownerId: input.ownerId,
+          automationJobId: input.automationJobId,
+          flowName: input.flowName,
+          errorMessage,
+          context: {
+            recipient,
+            action_count: input.actions.length,
+            delivery_id: delivery.id,
+          },
+        })
+        return {
+          provider: providerName(),
+          status: 'failed',
+          reason: errorMessage,
+          metadata: { delivery_id: delivery.id },
+        }
+      }
+    } else if (isStubProviderEnabled()) {
+      providerMessageId = await sendViaStub({
+        deliveryId: delivery.id,
+        integrationEventId: delivery.integration_event_id,
+        mode: 'action',
+        recipient,
+        preview: body,
+        providerPayload: {
+          actions: input.actions,
+        },
+      })
+    } else {
       await updateOutboundDelivery({
         deliveryId: delivery.id,
         integrationEventId: delivery.integration_event_id,
@@ -737,21 +1116,20 @@ export class DefaultWhatsAppProvider implements WhatsAppProvider {
       }
     }
 
-    const providerMessageId = await sendViaStub({
-      deliveryId: delivery.id,
-      integrationEventId: delivery.integration_event_id,
-      mode: 'action',
-      recipient,
-      preview: body,
-      providerPayload: {
-        actions: input.actions,
-      },
-    })
+    if (!isStubProviderEnabled()) {
+      await updateOutboundDelivery({
+        deliveryId: delivery.id,
+        integrationEventId: delivery.integration_event_id,
+        status: 'sent',
+        providerMessageId: providerMessageId ?? undefined,
+        providerPayload,
+      })
+    }
 
     return {
       provider: providerName(),
       status: 'sent',
-      externalId: providerMessageId,
+      externalId: providerMessageId ?? undefined,
       metadata: {
         delivery_id: delivery.id,
         policy_mode: 'action',
@@ -803,9 +1181,20 @@ export class DefaultWhatsAppProvider implements WhatsAppProvider {
   async handleWebhookEvent(input: {
     headers: Record<string, string | undefined>
     body: unknown
+    rawBody?: Buffer | null
     requestId?: string | null
   }): Promise<WhatsAppWebhookEventResult> {
-    if (env.WHATSAPP_WEBHOOK_SECRET) {
+    const metaConfig = getMetaConfig()
+    if (metaConfig?.appSecret) {
+      const signatureHeader = input.headers['x-hub-signature-256'] ?? null
+      if (!input.rawBody || !isValidMetaSignature({ appSecret: metaConfig.appSecret, rawBody: input.rawBody, providedSignature: signatureHeader })) {
+        return {
+          handled: true,
+          statusCode: 401,
+          events: [],
+        }
+      }
+    } else if (env.WHATSAPP_WEBHOOK_SECRET) {
       const providedSecret = input.headers['x-whatsapp-webhook-secret']
       if (!providedSecret || providedSecret !== env.WHATSAPP_WEBHOOK_SECRET) {
         return {
@@ -886,6 +1275,27 @@ export class DefaultWhatsAppProvider implements WhatsAppProvider {
           deliveryId: linkedDeliveryId,
           status: event.eventType === 'unknown' ? 'ignored' : 'processed',
         })
+
+        if (event.eventType === 'message' && event.sender) {
+          const inboundText = extractInboundMessageText(event)
+          if (inboundText) {
+            await processWhatsAppOwnerBotMessage({
+              sender: event.sender,
+              text: inboundText,
+              sendText: async (sendInput) => {
+                await this.sendFreeform({
+                  recipient: sendInput.to,
+                  text: sendInput.text,
+                  organizationId: sendInput.organizationId ?? null,
+                  ownerId: sendInput.ownerId ?? null,
+                  policyContext: { sessionOpen: true },
+                  metadata: sendInput.metadata ?? {},
+                  flowName: 'whatsapp_owner_bot',
+                })
+              },
+            })
+          }
+        }
 
         await updateIntegrationEvent({
           id: integrationEvent.id,

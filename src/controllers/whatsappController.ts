@@ -38,6 +38,7 @@ export const postWhatsAppWebhook = asyncHandler(async (request: Request, respons
   const result = await getAutomationProviderRegistry().whatsapp.handleWebhookEvent({
     headers: collectHeaders(request),
     body: payload,
+    rawBody: request.rawBody ?? null,
     requestId: request.requestId ?? null,
   })
 
