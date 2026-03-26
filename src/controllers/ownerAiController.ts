@@ -5,6 +5,9 @@ import { createAuditLog } from '../services/auditLogService.js'
 import { getOrganizationAiSettings, updateOrganizationAiSettings } from '../services/ai/aiConfigService.js'
 import { isAiConfigured } from '../services/ai/aiClient.js'
 import { updateOrganizationAiSettingsSchema } from '../validations/aiSchemas.js'
+import { env } from '../config/env.js'
+import { classifyTicketIntent } from '../services/ai/intentClassifier.js'
+import { summarizeTicket } from '../services/ai/ticketSummarizer.js'
 
 function requireOwnerContext(request: Request): { ownerId: string; organizationId: string } {
   const ownerId = request.owner?.ownerId
@@ -47,5 +50,76 @@ export const putOwnerAiSettings = asyncHandler(async (request: Request, response
     ai_configured: isAiConfigured(),
     settings,
   })
+})
+
+export const getOwnerIntegrations = asyncHandler(async (_request: Request, response: Response) => {
+  response.json({
+    ok: true,
+    integrations: {
+      whatsapp: {
+        configured: env.WHATSAPP_PROVIDER === 'meta',
+        provider: env.WHATSAPP_PROVIDER ?? null,
+        live: env.WHATSAPP_PROVIDER === 'meta' && !!env.WHATSAPP_ACCESS_TOKEN,
+      },
+      telegram: {
+        configured: !!env.TELEGRAM_BOT_TOKEN,
+      },
+      email: {
+        configured: !!env.EMAIL_USER && !!env.EMAIL_PASS,
+      },
+      instagram: {
+        configured: false,
+        coming_soon: true,
+      },
+    },
+  })
+})
+
+export const postOwnerTicketClassify = asyncHandler(async (request: Request, response: Response) => {
+  const { organizationId } = requireOwnerContext(request)
+  const { subject, message, ticket_id } = request.body as {
+    subject: string
+    message: string
+    ticket_id?: string
+  }
+
+  const result = await classifyTicketIntent({
+    organizationId,
+    ticketId: ticket_id,
+    subject,
+    message,
+  })
+
+  if (result === null) {
+    response.json({ ok: false, reason: 'AI classification not enabled or not configured' })
+    return
+  }
+
+  response.json({ ok: true, classification: result })
+})
+
+export const postOwnerTicketSummarize = asyncHandler(async (request: Request, response: Response) => {
+  const { organizationId } = requireOwnerContext(request)
+  const { ticket_id, subject, message, updates } = request.body as {
+    ticket_id: string
+    subject: string
+    message: string
+    updates?: Array<{ timestamp: string; author: string; message: string }>
+  }
+
+  const result = await summarizeTicket({
+    organizationId,
+    ticketId: ticket_id,
+    subject,
+    message,
+    updates,
+  })
+
+  if (result === null) {
+    response.json({ ok: false, reason: 'AI summarization not enabled or not configured' })
+    return
+  }
+
+  response.json({ ok: true, summary: result })
 })
 

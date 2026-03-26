@@ -223,6 +223,23 @@ export async function listOrganizationReminders(organizationId: string) {
   return data ?? []
 }
 
+export async function updateTenantPhone(input: {
+  tenantId: string
+  organizationId: string
+  phone: string | null
+}) {
+  const { data, error } = await supabaseAdmin
+    .from('tenants')
+    .update({ phone: input.phone })
+    .eq('id', input.tenantId)
+    .eq('organization_id', input.organizationId)
+    .select('*')
+    .maybeSingle()
+
+  throwIfError(error, 'Failed to update tenant phone')
+  return data
+}
+
 export async function markReminderAsSent(reminderId: string, organizationId: string) {
   const { data, error } = await supabaseAdmin
     .from('rent_reminders')

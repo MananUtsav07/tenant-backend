@@ -29,7 +29,7 @@ import {
   getTelegramBotUsername,
   getTenantTelegramConnectionState,
 } from '../services/telegramOnboardingService.js'
-import { createTenantTicket, getOwnerContactByTenant, getTenantById, getTenantSummary, listTenantTickets } from '../services/tenantService.js'
+import { createTenantTicket, getOwnerContactByTenant, getTenantById, getTenantSummary, listTenantTickets, updateTenantPhone } from '../services/tenantService.js'
 import { detectVacancyIntentFromTicket } from '../services/vacancyWorkflowService.js'
 import { nextDueDateFromDay } from '../utils/date.js'
 import { tenantMaintenanceCompletionSchema } from '../validations/maintenanceWorkflowSchemas.js'
@@ -573,4 +573,23 @@ export const postTenantTelegramDisconnect = asyncHandler(async (request: Request
     ok: true,
     disconnected,
   })
+})
+
+export const patchTenantMe = asyncHandler(async (request: Request, response: Response) => {
+  const { tenantId, organizationId } = requireTenantIdentity(request)
+
+  const body = request.body as { phone?: unknown }
+  if (!Object.prototype.hasOwnProperty.call(body, 'phone')) {
+    throw new AppError('No profile fields provided to update', 400)
+  }
+
+  const rawPhone = body.phone
+  const phone = rawPhone === null || rawPhone === undefined || rawPhone === '' ? null : String(rawPhone).trim() || null
+
+  const updated = await updateTenantPhone({ tenantId, organizationId, phone })
+  if (!updated) {
+    throw new AppError('Tenant not found', 404)
+  }
+
+  response.json({ ok: true, tenant: updated })
 })

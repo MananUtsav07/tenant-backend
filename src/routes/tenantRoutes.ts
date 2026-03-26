@@ -20,6 +20,7 @@ import {
   postTenantTicketReply,
   postTenantTelegramDisconnect,
   postTenantTicket,
+  patchTenantMe,
 } from '../controllers/tenantController.js'
 import { requireTenantAuth } from '../middleware/tenantAuth.js'
 
@@ -28,6 +29,7 @@ export function createTenantRouter() {
 
   router.use(requireTenantAuth)
 
+  router.patch('/me', patchTenantMe)
   router.get('/dashboard-summary', getTenantDashboardSummary)
   router.get('/lease-renewal-intent-state', getTenantLeaseRenewalIntentStateController)
   router.post('/lease-renewal-intent', postTenantLeaseRenewalIntentController)

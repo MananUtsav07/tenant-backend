@@ -1,6 +1,12 @@
 import { Router } from 'express'
 
-import { getOwnerAiSettings, putOwnerAiSettings } from '../controllers/ownerAiController.js'
+import {
+  getOwnerAiSettings,
+  putOwnerAiSettings,
+  getOwnerIntegrations,
+  postOwnerTicketClassify,
+  postOwnerTicketSummarize,
+} from '../controllers/ownerAiController.js'
 import { requireOwnerAuth } from '../middleware/ownerAuth.js'
 
 export function createOwnerAiRouter() {
@@ -9,6 +15,9 @@ export function createOwnerAiRouter() {
   router.use(requireOwnerAuth)
   router.get('/ai-settings', getOwnerAiSettings)
   router.put('/ai-settings', putOwnerAiSettings)
+  router.get('/integrations', getOwnerIntegrations)
+  router.post('/ai/classify', postOwnerTicketClassify)
+  router.post('/ai/summarize', postOwnerTicketSummarize)
 
   return router
 }
