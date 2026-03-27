@@ -3,7 +3,7 @@ import type { PostgrestError } from '@supabase/supabase-js'
 import { AppError } from '../lib/errors.js'
 import { supabaseAdmin } from '../lib/supabase.js'
 import { getCurrentCycleYearMonth, resolveTenantPaymentStatus } from '../utils/paymentStatus.js'
-import { isTicketClassificationEnabled } from './ai/featureFlags.js'
+import { classifyTicketIntent } from './ai/intentClassifier.js'
 
 function throwIfError(error: PostgrestError | null, message: string): void {
   if (error) {
@@ -136,14 +136,22 @@ export async function createTenantTicket(input: {
 
   throwIfError(error, 'Failed to create ticket')
 
-  // Infrastructure-only hook:
-  // The AI module is wired for future intent classification, but this branch
-  // intentionally does not execute classification yet.
-  const aiTicketClassificationEnabled = await isTicketClassificationEnabled(input.organization_id)
-  if (aiTicketClassificationEnabled) {
-    // Future rollout point:
-    // await classifyTicketIntent(...)
-  }
+  // Fire-and-forget AI classification — does not block ticket creation response.
+  void classifyTicketIntent({
+    organizationId: input.organization_id,
+    ticketId: data.id,
+    subject: input.subject,
+    message: input.message,
+  }).then(async (result) => {
+    if (result) {
+      await supabaseAdmin
+        .from('support_tickets')
+        .update({ ai_category: result.category, ai_confidence: result.confidence })
+        .eq('id', data.id)
+    }
+  }).catch(() => {
+    // Classification is non-critical; ticket was already created successfully.
+  })
 
   return data
 }
