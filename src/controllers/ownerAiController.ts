@@ -8,6 +8,12 @@ import { updateOrganizationAiSettingsSchema } from '../validations/aiSchemas.js'
 import { env } from '../config/env.js'
 import { classifyTicketIntent } from '../services/ai/intentClassifier.js'
 import { summarizeTicket } from '../services/ai/ticketSummarizer.js'
+import {
+  createOwnerTelegramConnectUrl,
+  getOwnerTelegramConnectionState,
+  getTelegramBotUsername,
+} from '../services/telegramOnboardingService.js'
+import { getOwnerWhatsAppLink } from '../services/whatsappLinkService.js'
 
 function requireOwnerContext(request: Request): { ownerId: string; organizationId: string } {
   const ownerId = request.owner?.ownerId
@@ -52,7 +58,21 @@ export const putOwnerAiSettings = asyncHandler(async (request: Request, response
   })
 })
 
-export const getOwnerIntegrations = asyncHandler(async (_request: Request, response: Response) => {
+export const getOwnerIntegrations = asyncHandler(async (request: Request, response: Response) => {
+  const { ownerId, organizationId } = requireOwnerContext(request)
+  const [telegramState, whatsappLink] = await Promise.all([
+    getOwnerTelegramConnectionState({ ownerId, organizationId }),
+    getOwnerWhatsAppLink({ ownerId, organizationId }),
+  ])
+  const telegramBotUsername = getTelegramBotUsername()
+  const telegramConnectUrl =
+    env.TELEGRAM_BOT_TOKEN && telegramBotUsername
+      ? await createOwnerTelegramConnectUrl({
+          ownerId,
+          organizationId,
+        })
+      : null
+
   response.json({
     ok: true,
     integrations: {
@@ -60,9 +80,15 @@ export const getOwnerIntegrations = asyncHandler(async (_request: Request, respo
         configured: env.WHATSAPP_PROVIDER === 'meta',
         provider: env.WHATSAPP_PROVIDER ?? null,
         live: env.WHATSAPP_PROVIDER === 'meta' && !!env.WHATSAPP_ACCESS_TOKEN,
+        linked: Boolean(whatsappLink?.is_active && whatsappLink.phone_number),
+        linked_number: whatsappLink?.phone_number ?? null,
       },
       telegram: {
         configured: !!env.TELEGRAM_BOT_TOKEN,
+        linked: telegramState.connected,
+        bot_username: telegramBotUsername,
+        connect_url: telegramConnectUrl,
+        linked_chat: telegramState.linked_chat,
       },
       email: {
         configured: !!env.EMAIL_USER && !!env.EMAIL_PASS,
