@@ -13,6 +13,7 @@ import {
   resetTenantPassword,
 } from '../services/passwordResetService.js'
 import { findTenantByAccessId, getTenantById } from '../services/tenantService.js'
+import { hasRecentWhatsAppSession } from '../services/whatsappLinkService.js'
 import {
   ownerForgotPasswordSchema,
   ownerLoginSchema,
@@ -39,6 +40,41 @@ async function trackAnalyticsSafe(input: {
       error,
     })
   }
+}
+
+async function sendOwnerWhatsAppOnboarding(input: {
+  recipient: string
+  ownerId: string
+  organizationId: string
+  text: string
+}) {
+  const whatsapp = getAutomationProviderRegistry().whatsapp
+  const hasSession = await hasRecentWhatsAppSession({
+    organizationId: input.organizationId,
+    phoneNumber: input.recipient,
+  }).catch(() => false)
+
+  if (hasSession) {
+    await whatsapp.sendFreeform({
+      recipient: input.recipient,
+      text: input.text,
+      ownerId: input.ownerId,
+      organizationId: input.organizationId,
+      policyContext: { sessionOpen: true },
+      metadata: { event: 'whatsapp_owner_onboarding' },
+    })
+    return
+  }
+
+  await whatsapp.sendTemplate({
+    recipient: input.recipient,
+    templateKey: 'owner_whatsapp_onboarding',
+    fallbackText: input.text,
+    ownerId: input.ownerId,
+    organizationId: input.organizationId,
+    variables: { body: input.text },
+    metadata: { event: 'whatsapp_owner_onboarding' },
+  })
 }
 
 export const registerOwner = asyncHandler(async (request: Request, response: Response) => {
@@ -251,13 +287,11 @@ export const patchOwnerMe = asyncHandler(async (request: Request, response: Resp
       'Type /help anytime for the full command list.',
     ].join('\n')
 
-    void getAutomationProviderRegistry()
-      .whatsapp.sendFreeform({
+    void sendOwnerWhatsAppOnboarding({
         recipient: patch.support_whatsapp,
         text: onboardingMessage,
         ownerId: owner.id,
         organizationId: owner.organization_id,
-        metadata: { event: 'whatsapp_owner_onboarding' },
       })
       .catch(() => {
         // Non-fatal: onboarding message failure should not block the profile save response
