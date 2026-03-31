@@ -1293,6 +1293,20 @@ export class DefaultWhatsAppProvider implements WhatsAppProvider {
                   flowName: 'whatsapp_owner_bot',
                 })
               },
+              sendAction: async (actionInput) => {
+                await this.sendActionMessage({
+                  recipient: actionInput.to,
+                  body: actionInput.body,
+                  title: actionInput.title,
+                  footer: actionInput.footer,
+                  actions: actionInput.actions,
+                  organizationId: actionInput.organizationId ?? null,
+                  ownerId: actionInput.ownerId ?? null,
+                  policyContext: { sessionOpen: true },
+                  metadata: actionInput.metadata ?? {},
+                  flowName: 'whatsapp_owner_bot',
+                })
+              },
             })
           }
         }

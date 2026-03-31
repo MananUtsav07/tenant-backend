@@ -7,6 +7,7 @@ import { generateTenantAccessId } from '../utils/ids.js'
 import { getCurrentCycleYearMonth, resolveTenantPaymentStatus, type TenantPaymentStatus } from '../utils/paymentStatus.js'
 import { isTicketSummarizationEnabled } from './ai/featureFlags.js'
 import { createOrganization, upsertOwnerMembership } from './organizationService.js'
+import { upsertOwnerWhatsAppLink, upsertTenantWhatsAppLink } from './whatsappLinkService.js'
 
 function throwIfError(error: PostgrestError | null, message: string): void {
   if (error) {
@@ -118,6 +119,13 @@ export async function createOwner(input: {
       role: 'owner',
     })
 
+    await upsertOwnerWhatsAppLink({
+      organizationId: organization.id,
+      ownerId: data.id,
+      phoneNumber: input.support_whatsapp ?? null,
+      linkedVia: 'owner_profile',
+    })
+
     return data
   } catch (error) {
     if (!input.organization_id) {
@@ -167,6 +175,14 @@ export async function updateOwnerById(input: {
     .maybeSingle()
 
   throwIfError(error, 'Failed to update owner profile')
+  if (data && Object.prototype.hasOwnProperty.call(input.patch, 'support_whatsapp')) {
+    await upsertOwnerWhatsAppLink({
+      organizationId: data.organization_id,
+      ownerId: data.id,
+      phoneNumber: input.patch.support_whatsapp ?? null,
+      linkedVia: 'owner_profile',
+    })
+  }
   return data
 }
 
@@ -307,6 +323,13 @@ export async function createTenant(args: {
     .single()
 
   throwIfError(error, 'Failed to create tenant')
+  await upsertTenantWhatsAppLink({
+    organizationId: args.organizationId,
+    tenantId: data.id,
+    ownerId: args.ownerId,
+    phoneNumber: args.input.phone ?? null,
+    linkedVia: 'tenant_phone',
+  })
   return data
 }
 

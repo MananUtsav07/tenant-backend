@@ -5,6 +5,7 @@ import { AppError, asyncHandler } from '../lib/errors.js'
 import { signOwnerToken, signTenantToken } from '../lib/jwt.js'
 import { createAnalyticsEvent } from '../services/analyticsService.js'
 import { findOwnerByEmail, createOwner, getOwnerById, updateOwnerById } from '../services/ownerService.js'
+import { getAutomationProviderRegistry } from '../services/automation/providers/providerRegistry.js'
 import {
   requestOwnerPasswordReset,
   requestTenantPasswordReset,
@@ -219,6 +220,48 @@ export const patchOwnerMe = asyncHandler(async (request: Request, response: Resp
 
   if (!owner) {
     throw new AppError('Owner not found', 404)
+  }
+
+  if (patch.support_whatsapp) {
+    const ownerName = owner.full_name ?? owner.company_name ?? 'there'
+    const onboardingMessage = [
+      `👋 Welcome to Prophives, ${ownerName}!`,
+      '',
+      'Your WhatsApp number is now linked to your owner account. You can manage your properties directly from this chat.',
+      '',
+      '📊 View & Manage',
+      '/ownerstats — Quick dashboard stats',
+      '/tickets — Browse support tickets',
+      '/tenants — View your tenants',
+      '/properties — Property snapshot',
+      '/approvals — Pending rent approvals',
+      '/portfolio — Monthly portfolio summary',
+      '/menu — Show main menu',
+      '',
+      '✏️ Actions',
+      '/reply <ticket-id> <message> — Reply to a ticket',
+      '/approve <approval-id> — Approve rent payment',
+      '/reject <approval-id> <reason> — Reject rent payment',
+      '/status <ticket-id> <status> — Update ticket status',
+      '',
+      '➕ Create',
+      '/addproperty — Add a new property',
+      '/addtenant — Add a new tenant',
+      '',
+      'Type /help anytime for the full command list.',
+    ].join('\n')
+
+    void getAutomationProviderRegistry()
+      .whatsapp.sendFreeform({
+        recipient: patch.support_whatsapp,
+        text: onboardingMessage,
+        ownerId: owner.id,
+        organizationId: owner.organization_id,
+        metadata: { event: 'whatsapp_owner_onboarding' },
+      })
+      .catch(() => {
+        // Non-fatal: onboarding message failure should not block the profile save response
+      })
   }
 
   response.json({

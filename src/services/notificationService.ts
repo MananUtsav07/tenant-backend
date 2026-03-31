@@ -1,4 +1,5 @@
 import { env } from '../config/env.js'
+import { getAutomationProviderRegistry } from './automation/providers/providerRegistry.js'
 import {
   sendOwnerRentPaymentApprovalNotification,
   sendOwnerTicketReplyNotification,
@@ -15,6 +16,7 @@ import { AppError } from '../lib/errors.js'
 import { getOwnerNotificationPreferences } from './ownerNotificationPreferenceService.js'
 import { createOwnerNotification, getOwnerById } from './ownerService.js'
 import { getOwnerTelegramChatLink, getTenantTelegramChatLink, sendTelegramMessageWithRetry } from './telegramService.js'
+import { getOwnerWhatsAppLink, getTenantWhatsAppLink, hasRecentWhatsAppSession } from './whatsappLinkService.js'
 
 function normalizeOwnerName(owner: { full_name?: string | null; company_name?: string | null; email: string }) {
   return owner.full_name || owner.company_name || owner.email
@@ -64,6 +66,147 @@ function buildFrontendUrl(path: string): string {
 function truncateText(input: string, max = 500): string {
   const value = input.trim()
   return value.length > max ? `${value.slice(0, max)}...` : value
+}
+
+async function sendWhatsAppNotification(input: {
+  organizationId: string
+  ownerId: string
+  tenantId?: string
+  recipient: string | null
+  text: string
+  templateKey: string
+  title?: string
+  actions?: Array<{ id: string; label: string }>
+  metadata?: Record<string, unknown>
+}) {
+  const recipient = input.recipient?.trim() ?? ''
+  if (!recipient) {
+    return
+  }
+
+  try {
+    const hasSession = await hasRecentWhatsAppSession({
+      organizationId: input.organizationId,
+      phoneNumber: recipient,
+    })
+
+    if (hasSession) {
+      if (input.actions && input.actions.length > 0) {
+        await getAutomationProviderRegistry().whatsapp.sendActionMessage({
+          recipient,
+          title: input.title,
+          body: input.text,
+          actions: input.actions.slice(0, 3),
+          organizationId: input.organizationId,
+          ownerId: input.ownerId,
+          tenantId: input.tenantId ?? null,
+          policyContext: { sessionOpen: true },
+          metadata: input.metadata,
+        })
+        return
+      }
+
+      await getAutomationProviderRegistry().whatsapp.sendFreeform({
+        recipient,
+        text: input.text,
+        organizationId: input.organizationId,
+        ownerId: input.ownerId,
+        tenantId: input.tenantId ?? null,
+        policyContext: { sessionOpen: true },
+        metadata: input.metadata,
+      })
+      return
+    }
+
+    await getAutomationProviderRegistry().whatsapp.sendTemplate({
+      recipient,
+      templateKey: input.templateKey,
+      fallbackText: input.text,
+      organizationId: input.organizationId,
+      ownerId: input.ownerId,
+      tenantId: input.tenantId ?? null,
+      variables: {
+        body: input.text,
+      },
+      metadata: input.metadata,
+    })
+  } catch (error) {
+    console.error('[sendWhatsAppNotification] failed', {
+      ownerId: input.ownerId,
+      tenantId: input.tenantId ?? null,
+      organizationId: input.organizationId,
+      templateKey: input.templateKey,
+      error,
+    })
+  }
+}
+
+async function sendTenantWhatsApp(input: {
+  organizationId: string
+  ownerId: string
+  tenantId: string
+  text: string
+  templateKey: string
+  metadata?: Record<string, unknown>
+}) {
+  try {
+    const link = await getTenantWhatsAppLink({
+      organizationId: input.organizationId,
+      tenantId: input.tenantId,
+    })
+    if (!link?.phone_number) {
+      return
+    }
+
+    await sendWhatsAppNotification({
+      organizationId: input.organizationId,
+      ownerId: input.ownerId,
+      tenantId: input.tenantId,
+      recipient: link.phone_number,
+      text: input.text,
+      templateKey: input.templateKey,
+      metadata: input.metadata,
+    })
+  } catch (error) {
+    console.error('[sendTenantWhatsApp] failed', { tenantId: input.tenantId, error })
+  }
+}
+
+async function sendOwnerWhatsApp(input: {
+  organizationId: string
+  ownerId: string
+  text: string
+  templateKey: string
+  title?: string
+  actions?: Array<{ id: string; label: string }>
+  metadata?: Record<string, unknown>
+}) {
+  try {
+    const link = await getOwnerWhatsAppLink({
+      organizationId: input.organizationId,
+      ownerId: input.ownerId,
+    })
+    if (!link?.phone_number) {
+      return
+    }
+
+    await sendWhatsAppNotification({
+      organizationId: input.organizationId,
+      ownerId: input.ownerId,
+      recipient: link.phone_number,
+      text: input.text,
+      templateKey: input.templateKey,
+      title: input.title,
+      actions: input.actions,
+      metadata: input.metadata,
+    })
+  } catch (error) {
+    console.error('[sendOwnerWhatsApp] failed', {
+      ownerId: input.ownerId,
+      organizationId: input.organizationId,
+      error,
+    })
+  }
 }
 
 function formatPropertyLabel(propertyName: string | null, unitNumber: string | null): string {
@@ -191,6 +334,26 @@ export async function notifyOwnerTicketCreated(input: {
       console.error('[notifyOwnerTicketCreated] telegram failed', error)
     }
   }
+
+  await sendOwnerWhatsApp({
+    organizationId: input.organizationId,
+    ownerId: input.ownerId,
+    title: 'New Support Ticket',
+    text: [
+      `Ticket #${input.ticketId.slice(0, 8)} (${input.ticketId})`,
+      `Tenant: ${input.tenantName} (${input.tenantAccessId})`,
+      `Property: ${formatPropertyLabel(input.propertyName, input.unitNumber)}`,
+      `Subject: ${input.subject}`,
+      `Preview: ${truncateText(input.message, 320)}`,
+    ].join('\n'),
+    templateKey: 'owner_ticket_created',
+    actions: [
+      { id: `ts|${input.ticketId}|in_progress`, label: 'Mark In Progress' },
+      { id: `ts|${input.ticketId}|resolved`, label: 'Mark Resolved' },
+      { id: `ts|${input.ticketId}|closed`, label: 'Mark Closed' },
+    ],
+    metadata: { event: 'whatsapp_owner_ticket_created', ticket_id: input.ticketId },
+  })
 }
 
 export async function notifyOwnerTicketReply(input: {
@@ -276,6 +439,26 @@ export async function notifyOwnerTicketReply(input: {
       console.error('[notifyOwnerTicketReply] telegram failed', error)
     }
   }
+
+  await sendOwnerWhatsApp({
+    organizationId: input.organizationId,
+    ownerId: input.ownerId,
+    title: 'New Tenant Reply',
+    text: [
+      `Ticket #${input.ticketId.slice(0, 8)} (${input.ticketId})`,
+      `Tenant: ${input.tenantName} (${input.tenantAccessId})`,
+      `Property: ${formatPropertyLabel(input.propertyName, input.unitNumber)}`,
+      `Subject: ${input.subject}`,
+      `Reply: ${truncateText(input.message, 320)}`,
+    ].join('\n'),
+    templateKey: 'owner_ticket_reply',
+    actions: [
+      { id: `ts|${input.ticketId}|in_progress`, label: 'In Progress' },
+      { id: `ts|${input.ticketId}|resolved`, label: 'Resolved' },
+      { id: `ts|${input.ticketId}|closed`, label: 'Closed' },
+    ],
+    metadata: { event: 'whatsapp_owner_ticket_reply', ticket_id: input.ticketId },
+  })
 }
 
 export async function notifyOwnerRentPaymentAwaitingApproval(input: {
@@ -376,6 +559,40 @@ export async function notifyOwnerRentPaymentAwaitingApproval(input: {
       console.error('[notifyOwnerRentPaymentAwaitingApproval] telegram failed', error)
     }
   }
+
+  await sendOwnerWhatsApp({
+    organizationId: input.organizationId,
+    ownerId: input.ownerId,
+    title: 'Rent Approval Required',
+    text: [
+      `Approval ID: ${input.approvalId}`,
+      `Tenant: ${input.tenantName} (${input.tenantAccessId})`,
+      `Property: ${formatPropertyLabel(input.propertyName, input.unitNumber)}`,
+      `Due date: ${dueDateLabel}`,
+      `Amount: ${amountPaidLabel}`,
+    ].join('\n'),
+    templateKey: 'owner_rent_approval_required',
+    actions: [
+      { id: `ra|approve|${input.approvalId}`, label: 'Approve' },
+      { id: `rr|${input.approvalId}|proof`, label: 'Proof Missing' },
+      { id: `rr|${input.approvalId}|amount`, label: 'Amount Wrong' },
+    ],
+    metadata: { event: 'whatsapp_owner_rent_approval', approval_id: input.approvalId },
+  })
+
+  await sendOwnerWhatsApp({
+    organizationId: input.organizationId,
+    ownerId: input.ownerId,
+    title: 'More Approval Actions',
+    text: `More options for approval ${input.approvalId.slice(0, 8)}.`,
+    templateKey: 'owner_rent_approval_required',
+    actions: [
+      { id: `rr|${input.approvalId}|cycle`, label: 'Wrong Cycle' },
+      { id: `rm|approve|${input.approvalId}`, label: 'Approve With Note' },
+      { id: `rm|reject|${input.approvalId}`, label: 'Reject With Reason' },
+    ],
+    metadata: { event: 'whatsapp_owner_rent_approval_more', approval_id: input.approvalId },
+  })
 }
 
 export async function notifyTenantTicketReply(input: {
@@ -451,6 +668,20 @@ export async function notifyTenantTicketReply(input: {
       error,
     })
   }
+
+  await sendTenantWhatsApp({
+    organizationId: input.organizationId,
+    ownerId: input.ownerId,
+    tenantId: input.tenantId,
+    text: [
+      '📬 Support Ticket Update',
+      `📝 Subject: ${input.subject}`,
+      `👤 From: ${input.senderName} (${input.senderRoleLabel})`,
+      `💬 Message: ${truncateText(input.message, 450)}`,
+    ].join('\n'),
+    templateKey: 'tenant_ticket_update',
+    metadata: { event: 'whatsapp_tenant_ticket_reply' },
+  })
 }
 
 export async function notifyTenantTicketClosed(input: {
@@ -527,6 +758,22 @@ export async function notifyTenantTicketClosed(input: {
       error,
     })
   }
+
+  await sendTenantWhatsApp({
+    organizationId: input.organizationId,
+    ownerId: input.ownerId,
+    tenantId: input.tenantId,
+    text: [
+      '✅ Support Ticket Closed',
+      `📝 Subject: ${input.subject}`,
+      `👤 Closed by: ${input.senderName} (${input.senderRoleLabel})`,
+      ...(input.closingMessage?.trim() ? [`🗒️ Note: ${input.closingMessage.trim()}`] : []),
+      '',
+      'If the issue is still unresolved, create a new support ticket.',
+    ].join('\n'),
+    templateKey: 'tenant_ticket_closed',
+    metadata: { event: 'whatsapp_tenant_ticket_closed' },
+  })
 }
 
 export async function notifyTenantTicketStatusUpdated(input: {
@@ -730,6 +977,31 @@ export async function notifyTenantRentPaymentReviewed(input: {
       error,
     })
   }
+
+  await sendTenantWhatsApp({
+    organizationId: input.organizationId,
+    ownerId: input.ownerId,
+    tenantId: input.tenantId,
+    text:
+      input.status === 'approved'
+        ? [
+            '✅ Rent Payment Approved',
+            `💰 Amount: ${amountPaidLabel}`,
+            `📅 Due date: ${dueDateLabel}`,
+            `🏠 Property: ${formatPropertyLabel(input.propertyName, input.unitNumber)}`,
+            ...(input.ownerMessage?.trim() ? [`🗒️ Owner note: ${truncateText(input.ownerMessage, 400)}`] : []),
+          ].join('\n')
+        : [
+            '⚠️ Rent Payment Rejected',
+            `💰 Amount: ${amountPaidLabel}`,
+            `📅 Due date: ${dueDateLabel}`,
+            `🏠 Property: ${formatPropertyLabel(input.propertyName, input.unitNumber)}`,
+            `❗ Reason: ${input.rejectionReason?.trim() || 'Please contact your property team.'}`,
+            ...(input.ownerMessage?.trim() ? [`🗒️ Owner note: ${truncateText(input.ownerMessage, 400)}`] : []),
+          ].join('\n'),
+    templateKey: input.status === 'approved' ? 'tenant_rent_payment_approved' : 'tenant_rent_payment_rejected',
+    metadata: { event: input.status === 'approved' ? 'whatsapp_rent_payment_approved' : 'whatsapp_rent_payment_rejected' },
+  })
 }
 
 export async function notifyTenantMaintenanceScheduled(input: {

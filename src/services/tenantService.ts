@@ -2,6 +2,7 @@ import type { PostgrestError } from '@supabase/supabase-js'
 
 import { AppError } from '../lib/errors.js'
 import { supabaseAdmin } from '../lib/supabase.js'
+import { upsertTenantWhatsAppLink } from './whatsappLinkService.js'
 import { getCurrentCycleYearMonth, resolveTenantPaymentStatus } from '../utils/paymentStatus.js'
 import { classifyTicketIntent } from './ai/intentClassifier.js'
 
@@ -245,6 +246,15 @@ export async function updateTenantPhone(input: {
     .maybeSingle()
 
   throwIfError(error, 'Failed to update tenant phone')
+  if (data) {
+    await upsertTenantWhatsAppLink({
+      organizationId: input.organizationId,
+      tenantId: input.tenantId,
+      ownerId: data.owner_id ?? null,
+      phoneNumber: input.phone,
+      linkedVia: 'tenant_phone',
+    })
+  }
   return data
 }
 
