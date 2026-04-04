@@ -294,30 +294,18 @@ const REJECTION_TEMPLATES: Record<string, string> = {
 
 function helpText() {
   return [
-    '🤖 Prophives WhatsApp Commands',
+    '🤖 Prophives — Quick Reference',
     '',
-    '📊 View & Manage',
-    '/ownerstats — Owner dashboard snapshot',
-    '/tickets [all|open|in_progress|resolved|closed] [page] — List tickets',
-    '/tenants — View recent tenants',
-    '/properties — View properties with stats',
-    '/approvals — Pending rent approvals',
-    '/portfolio — Monthly portfolio snapshot',
-    '/menu — Show main menu',
+    'Just type any keyword:',
     '',
-    '✏️ Actions',
-    '/reply <ticket-id> <message> — Reply to tenant ticket',
-    '/approve <approval-id> [message] — Approve rent',
-    '/reject <approval-id> <reason|proof|amount|cycle> — Reject rent',
-    '/status <ticket-id> <open|in_progress|resolved|closed> — Update ticket status',
+    '📊 *stats* — Dashboard overview',
+    '🎫 *tickets* — View & manage tickets',
+    '👥 *tenants* — List tenants',
+    '🏠 *properties* — Property snapshot',
+    '✅ *approvals* — Review rent payments',
+    '📋 *menu* — Full menu',
     '',
-    '➕ Create',
-    '/addproperty — Add a new property',
-    '/addtenant — Add a new tenant',
-    '/cancel — Cancel current operation',
-    '',
-    '⚙️ Account',
-    '/disconnect — Stop WhatsApp bot for this number',
+    'Type *menu* anytime to get started.',
   ].join('\n')
 }
 
@@ -1031,7 +1019,7 @@ async function handlePropertiesCommand(input: { owner: OwnerIdentity; sender: st
   if (!properties || properties.length === 0) {
     await input.sendText({
       to: input.sender,
-      text: 'ℹ️ No properties found. Use /addproperty to create one.',
+      text: 'ℹ️ No properties found. Type *add property* to create one.',
       organizationId: input.owner.organization_id,
       ownerId: input.owner.id,
       metadata: { event: 'whatsapp_properties_empty' },
@@ -1382,7 +1370,7 @@ async function startAddTenant(input: { owner: OwnerIdentity; sender: string; sen
   if (options.length === 0) {
     await input.sendText({
       to: input.sender,
-      text: 'You need at least one property before adding a tenant. Use /addproperty first.',
+      text: 'You need at least one property before adding a tenant. Type *add property* first.',
       organizationId: input.owner.organization_id,
       ownerId: input.owner.id,
       metadata: { event: 'whatsapp_add_tenant_no_properties' },
