@@ -68,10 +68,63 @@ type AddTenantConversation = {
   updatedAt: number
 }
 
-type ConversationState = AddPropertyConversation | AddTenantConversation
+type TicketReplyConversation = {
+  flow: 'ticket_reply'
+  ownerId: string
+  organizationId: string
+  step: 'select_ticket' | 'enter_reply'
+  data: {
+    tickets: Array<{ id: string; subject: string; tenantName: string; currentStatus: string }>
+    selectedTicketId?: string
+    selectedSubject?: string
+  }
+  updatedAt: number
+}
+
+type TicketStatusConversation = {
+  flow: 'ticket_status'
+  ownerId: string
+  organizationId: string
+  step: 'select_ticket' | 'select_status'
+  data: {
+    tickets: Array<{ id: string; subject: string; tenantName: string; currentStatus: string }>
+    selectedTicketId?: string
+  }
+  updatedAt: number
+}
+
+type ApprovalsConversation = {
+  flow: 'approvals_review'
+  ownerId: string
+  organizationId: string
+  step: 'select_approval' | 'select_action' | 'select_rejection'
+  data: {
+    approvals: Array<{ id: string; tenantName: string; amount: string; dueDate: string }>
+    selectedApprovalId?: string
+  }
+  updatedAt: number
+}
+
+type ConversationState = AddPropertyConversation | AddTenantConversation | TicketReplyConversation | TicketStatusConversation | ApprovalsConversation
 
 const CONVERSATION_TTL_MS = 10 * 60 * 1000
 const conversations = new Map<string, ConversationState>()
+
+// Pending menu: maps numbered user replies to action IDs (e.g. 1 → 'mn|stats')
+// Cleared when a new flow starts or a number is consumed.
+const pendingMenus = new Map<string, Array<{ actionId: string; label: string }>>()
+
+function setPendingMenu(sender: string, options: Array<{ actionId: string; label: string }>) {
+  pendingMenus.set(sender, options.slice(0, 9))
+}
+
+function getPendingMenu(sender: string) {
+  return pendingMenus.get(sender) ?? null
+}
+
+function clearPendingMenu(sender: string) {
+  pendingMenus.delete(sender)
+}
 
 function nowMs() {
   return Date.now()
@@ -281,15 +334,17 @@ async function sendFlowActions(input: {
     return
   }
 
+  const sliced = input.actions.slice(0, 3)
   await input.sendAction({
     to: input.sender,
     body: input.body,
     title: input.title,
-    actions: input.actions.slice(0, 3),
+    actions: sliced,
     organizationId: input.owner.organization_id,
     ownerId: input.owner.id,
     metadata: { event: input.metadataEvent },
   })
+  setPendingMenu(input.sender, sliced.map((a) => ({ actionId: a.id, label: a.label })))
 }
 
 async function sendCancelFlowAction(input: {
@@ -872,10 +927,20 @@ async function handleTicketsCommand(input: {
   const total = count ?? 0
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
   const currentPage = Math.min(safePage, totalPages)
-  const rows = (data ?? []).map((row) => {
+
+  const rawTickets = (data ?? []).map((row) => {
     const tenant = (row.tenants as { full_name?: string | null; tenant_access_id?: string | null } | null) ?? null
-    const statusIcon = row.status === 'closed' ? '✅' : row.status === 'resolved' ? '🟢' : row.status === 'in_progress' ? '🟡' : '🟠'
-    return `${statusIcon} #${String(row.id).slice(0, 8)} ${row.subject} (${tenant?.full_name ?? tenant?.tenant_access_id ?? 'Tenant'})`
+    return {
+      id: String(row.id),
+      subject: String(row.subject),
+      currentStatus: String(row.status),
+      tenantName: tenant?.full_name ?? tenant?.tenant_access_id ?? 'Tenant',
+    }
+  })
+
+  const rows = rawTickets.map((t) => {
+    const statusIcon = t.currentStatus === 'closed' ? '✅' : t.currentStatus === 'resolved' ? '🟢' : t.currentStatus === 'in_progress' ? '🟡' : '🟠'
+    return `${statusIcon} ${t.subject} (${t.tenantName})`
   })
 
   const text =
@@ -891,37 +956,34 @@ async function handleTicketsCommand(input: {
     metadata: { event: 'whatsapp_tickets_list', filter: input.filter, page: currentPage, total },
   })
 
-  if (input.sendAction) {
-    const filterActions: Array<{ id: string; label: string }> = []
-    if (input.filter !== 'open') filterActions.push({ id: 'tk|open|1', label: '🟠 Open' })
-    if (input.filter !== 'in_progress') filterActions.push({ id: 'tk|in_progress|1', label: '🟡 In Progress' })
-    if (input.filter !== 'closed') filterActions.push({ id: 'tk|closed|1', label: '✅ Closed' })
-    if (filterActions.length > 3) filterActions.length = 3
+  // Quick actions after ticket list — stored as pending menu so numbers work
+  if (rawTickets.length > 0) {
+    const quickOptions = [
+      { actionId: 'flow|ticket_reply', label: '✏️ Reply to a ticket' },
+      { actionId: 'flow|ticket_status', label: '🔄 Update ticket status' },
+      { actionId: 'mn|menu', label: '📋 Main Menu' },
+    ]
 
-    await input.sendAction({
+    await input.sendText({
       to: input.sender,
-      body: 'Filter tickets or navigate pages.',
-      actions: filterActions,
+      text: ['', ...quickOptions.map((o, i) => `${i + 1}. ${o.label}`)].join('\n'),
       organizationId: input.owner.organization_id,
       ownerId: input.owner.id,
-      metadata: { event: 'whatsapp_tickets_filter_buttons' },
+      metadata: { event: 'whatsapp_ticket_quick_actions' },
     })
 
-    if (totalPages > 1) {
-      const navActions: Array<{ id: string; label: string }> = []
-      if (currentPage > 1) navActions.push({ id: `tk|${input.filter}|${currentPage - 1}`, label: '◀ Previous' })
-      if (currentPage < totalPages) navActions.push({ id: `tk|${input.filter}|${currentPage + 1}`, label: 'Next ▶' })
-      navActions.push({ id: 'mn|menu', label: '📋 Menu' })
-
-      await input.sendAction({
-        to: input.sender,
-        body: `Page ${currentPage} of ${totalPages}`,
-        actions: navActions,
-        organizationId: input.owner.organization_id,
-        ownerId: input.owner.id,
-        metadata: { event: 'whatsapp_tickets_nav_buttons' },
-      })
-    }
+    // Store tickets in conversation so reply/status flows can reference them
+    setConversation(input.sender, {
+      flow: 'ticket_reply',
+      ownerId: input.owner.id,
+      organizationId: input.owner.organization_id,
+      step: 'select_ticket',
+      data: { tickets: rawTickets },
+    })
+    clearPendingMenu(input.sender)
+    setPendingMenu(input.sender, quickOptions)
+  } else {
+    await sendBackToMenu({ owner: input.owner, sender: input.sender, sendAction: input.sendAction })
   }
 }
 
@@ -1031,18 +1093,15 @@ async function handleApprovalsCommand(input: { owner: OwnerIdentity; sender: str
     .eq('owner_id', input.owner.id)
     .eq('status', 'awaiting_owner_approval')
     .order('created_at', { ascending: false })
-    .limit(5)
+    .limit(8)
 
   if (error) {
     throw new AppError('Failed to load pending approvals', 500)
   }
 
-  const lines = (data ?? []).map((row) => {
-    const tenant = (row.tenants as { full_name?: string | null; tenant_access_id?: string | null } | null) ?? null
-    return `• ${tenant?.full_name ?? tenant?.tenant_access_id ?? 'Tenant'} | ${row.amount_paid} | due ${row.due_date}\n  ID: ${row.id}`
-  })
+  const rows = data ?? []
 
-  if ((data ?? []).length === 0) {
+  if (rows.length === 0) {
     await input.sendText({
       to: input.sender,
       text: '✅ No pending rent approvals right now.',
@@ -1054,33 +1113,34 @@ async function handleApprovalsCommand(input: { owner: OwnerIdentity; sender: str
     return
   }
 
+  const approvals = rows.map((row) => {
+    const tenant = (row.tenants as { full_name?: string | null; tenant_access_id?: string | null } | null) ?? null
+    return {
+      id: row.id as string,
+      tenantName: tenant?.full_name ?? tenant?.tenant_access_id ?? 'Tenant',
+      amount: String(row.amount_paid),
+      dueDate: String(row.due_date),
+    }
+  })
+
+  const lines = approvals.map((a, i) => `${i + 1}. ${a.tenantName} — ${a.amount} (due ${a.dueDate})`)
+
   await input.sendText({
     to: input.sender,
-    text: ['💸 Pending Rent Approvals', ...lines].join('\n'),
+    text: ['💸 Pending Rent Approvals', '', ...lines, '', 'Reply with a number to review an approval.'].join('\n'),
     organizationId: input.owner.organization_id,
     ownerId: input.owner.id,
     metadata: { event: 'whatsapp_approvals_list' },
   })
 
-  if (input.sendAction) {
-    for (const row of data ?? []) {
-      const tenant = (row.tenants as { full_name?: string | null; tenant_access_id?: string | null } | null) ?? null
-      const tenantLabel = tenant?.full_name ?? tenant?.tenant_access_id ?? 'Tenant'
-      await input.sendAction({
-        to: input.sender,
-        body: `${tenantLabel} — ${row.amount_paid} due ${row.due_date}`,
-        title: `#${String(row.id).slice(0, 8)}`,
-        actions: [
-          { id: `ra|approve|${row.id}`, label: '✅ Approve' },
-          { id: `ra|reject_proof|${row.id}`, label: '❌ Proof Missing' },
-          { id: `ra|reject_amount|${row.id}`, label: '❌ Amount Wrong' },
-        ],
-        organizationId: input.owner.organization_id,
-        ownerId: input.owner.id,
-        metadata: { event: 'whatsapp_approval_actions', approval_id: row.id },
-      })
-    }
-  }
+  setConversation(input.sender, {
+    flow: 'approvals_review',
+    ownerId: input.owner.id,
+    organizationId: input.owner.organization_id,
+    step: 'select_approval',
+    data: { approvals },
+  })
+  clearPendingMenu(input.sender)
 }
 
 async function handlePortfolioCommand(input: { owner: OwnerIdentity; sender: string; sendText: SendTextFn; sendAction?: SendActionFn }) {
@@ -1221,83 +1281,61 @@ async function handleStatusCommand(input: {
 }
 
 async function sendMenu(input: { owner: OwnerIdentity; sender: string; sendText: SendTextFn; sendAction?: SendActionFn }) {
-  if (input.sendAction) {
-    await input.sendAction({
-      to: input.sender,
-      body: '📊 View your dashboard, tickets, tenants, properties, and more.',
-      title: '📋 Main Menu',
-      actions: [
-        { id: 'mn|stats', label: '📊 Dashboard Stats' },
-        { id: 'mn|tickets', label: '🎫 Tickets' },
-        { id: 'mn|tenants', label: '👥 Tenants' },
-      ],
-      organizationId: input.owner.organization_id,
-      ownerId: input.owner.id,
-      metadata: { event: 'whatsapp_menu_1' },
-    })
-    await input.sendAction({
-      to: input.sender,
-      body: '🏠 Properties, approvals, and portfolio.',
-      actions: [
-        { id: 'mn|properties', label: '🏠 Properties' },
-        { id: 'mn|approvals', label: '💸 Approvals' },
-        { id: 'mn|portfolio', label: '📈 Portfolio' },
-      ],
-      organizationId: input.owner.organization_id,
-      ownerId: input.owner.id,
-      metadata: { event: 'whatsapp_menu_2' },
-    })
-    await input.sendAction({
-      to: input.sender,
-      body: '➕ Add properties or tenants, or get help.',
-      actions: [
-        { id: 'mn|add_property', label: '➕ Add Property' },
-        { id: 'mn|add_tenant', label: '➕ Add Tenant' },
-        { id: 'mn|help', label: '❓ Help' },
-      ],
-      organizationId: input.owner.organization_id,
-      ownerId: input.owner.id,
-      metadata: { event: 'whatsapp_menu_3' },
-    })
-  } else {
-    await input.sendText({
-      to: input.sender,
-      text: [
-        '📋 Prophives Main Menu',
-        '',
-        '📊 /ownerstats — Dashboard stats',
-        '🎫 /tickets — Browse tickets',
-        '👥 /tenants — View tenants',
-        '🏠 /properties — Property snapshot',
-        '💸 /approvals — Rent approvals',
-        '📈 /portfolio — Portfolio summary',
-        '',
-        '➕ /addproperty — Add property',
-        '➕ /addtenant — Add tenant',
-        '❓ /help — Full command list',
-      ].join('\n'),
-      organizationId: input.owner.organization_id,
-      ownerId: input.owner.id,
-      metadata: { event: 'whatsapp_menu' },
-    })
-  }
+  const menuOptions = [
+    { actionId: 'mn|stats', label: '📊 Dashboard Stats' },
+    { actionId: 'mn|tickets', label: '🎫 Tickets' },
+    { actionId: 'mn|tenants', label: '👥 Tenants' },
+    { actionId: 'mn|properties', label: '🏠 Properties' },
+    { actionId: 'mn|approvals', label: '💸 Rent Approvals' },
+    { actionId: 'mn|portfolio', label: '📈 Portfolio' },
+    { actionId: 'mn|add_property', label: '➕ Add Property' },
+    { actionId: 'mn|add_tenant', label: '➕ Add Tenant' },
+  ]
+
+  await input.sendText({
+    to: input.sender,
+    text: [
+      '📋 *Prophives Menu*',
+      '',
+      ...menuOptions.map((opt, i) => `${i + 1}. ${opt.label}`),
+      '',
+      'Reply with a number to navigate.',
+    ].join('\n'),
+    organizationId: input.owner.organization_id,
+    ownerId: input.owner.id,
+    metadata: { event: 'whatsapp_menu' },
+  })
+
+  setPendingMenu(input.sender, menuOptions)
 }
 
-async function sendBackToMenu(input: { owner: OwnerIdentity; sender: string; sendAction?: SendActionFn }) {
+async function sendBackToMenu(input: { owner: OwnerIdentity; sender: string; sendText?: SendTextFn; sendAction?: SendActionFn }) {
+  const quickOptions = [
+    { actionId: 'mn|menu', label: '📋 Main Menu' },
+    { actionId: 'mn|stats', label: '📊 Stats' },
+    { actionId: 'mn|tickets', label: '🎫 Tickets' },
+  ]
+
   if (input.sendAction) {
     await input.sendAction({
       to: input.sender,
       body: 'What would you like to do next?',
-      actions: [
-        { id: 'mn|menu', label: '📋 Main Menu' },
-        { id: 'mn|stats', label: '📊 Stats' },
-        { id: 'mn|tickets', label: '🎫 Tickets' },
-      ],
+      actions: quickOptions.map((o) => ({ id: o.actionId, label: o.label })),
+      organizationId: input.owner.organization_id,
+      ownerId: input.owner.id,
+      metadata: { event: 'whatsapp_back_menu' },
+    })
+  } else if (input.sendText) {
+    await input.sendText({
+      to: input.sender,
+      text: 'What next?\n1. Main Menu\n2. Stats\n3. Tickets\n\n(Or type anything to see the full menu)',
       organizationId: input.owner.organization_id,
       ownerId: input.owner.id,
       metadata: { event: 'whatsapp_back_menu' },
     })
   }
+
+  setPendingMenu(input.sender, quickOptions)
 }
 
 async function startAddProperty(input: { owner: OwnerIdentity; sender: string; sendText: SendTextFn; sendAction?: SendActionFn }) {
@@ -1618,6 +1656,218 @@ async function processAddTenantConversation(input: {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Ticket Reply Flow
+// ---------------------------------------------------------------------------
+
+async function processTicketReplyConversation(input: {
+  sender: string
+  conv: TicketReplyConversation
+  text: string
+  owner: OwnerIdentity
+  sendText: SendTextFn
+  sendAction?: SendActionFn
+}) {
+  const ctx = { owner: input.owner, sender: input.sender, sendText: input.sendText, sendAction: input.sendAction }
+  const value = input.text.trim()
+
+  if (input.conv.step === 'select_ticket') {
+    const tickets = input.conv.data.tickets
+    const num = Number(value)
+    if (!Number.isInteger(num) || num < 1 || num > tickets.length) {
+      await input.sendText({
+        to: input.sender,
+        text: `Please reply with a number between 1 and ${tickets.length}.`,
+        organizationId: input.owner.organization_id,
+        ownerId: input.owner.id,
+      })
+      return
+    }
+    const selected = tickets[num - 1]
+    input.conv.data.selectedTicketId = selected.id
+    input.conv.data.selectedSubject = selected.subject
+    input.conv.step = 'enter_reply'
+    input.conv.updatedAt = nowMs()
+    conversations.set(input.sender, input.conv)
+    clearPendingMenu(input.sender)
+    await input.sendText({
+      to: input.sender,
+      text: `Replying to: "${selected.subject}" (${selected.tenantName})\n\nType your reply message:`,
+      organizationId: input.owner.organization_id,
+      ownerId: input.owner.id,
+    })
+    await sendCancelFlowAction({ owner: input.owner, sender: input.sender, sendAction: input.sendAction, metadataEvent: 'whatsapp_ticket_reply_cancel' })
+    return
+  }
+
+  if (input.conv.step === 'enter_reply') {
+    if (value.length < 1 || value.length > 2000) {
+      await input.sendText({ to: input.sender, text: 'Reply must be 1–2000 characters. Try again.', organizationId: input.owner.organization_id, ownerId: input.owner.id })
+      return
+    }
+    clearConversation(input.sender)
+    await handleReplyCommand({ ...ctx, command: { ticketId: input.conv.data.selectedTicketId!, message: value } })
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Ticket Status Flow
+// ---------------------------------------------------------------------------
+
+async function processTicketStatusConversation(input: {
+  sender: string
+  conv: TicketStatusConversation
+  text: string
+  owner: OwnerIdentity
+  sendText: SendTextFn
+  sendAction?: SendActionFn
+}) {
+  const ctx = { owner: input.owner, sender: input.sender, sendText: input.sendText, sendAction: input.sendAction }
+  const value = input.text.trim()
+  const lc = value.toLowerCase()
+
+  if (input.conv.step === 'select_ticket') {
+    const tickets = input.conv.data.tickets
+    const num = Number(value)
+    if (!Number.isInteger(num) || num < 1 || num > tickets.length) {
+      await input.sendText({
+        to: input.sender,
+        text: `Reply with a number between 1 and ${tickets.length}.`,
+        organizationId: input.owner.organization_id,
+        ownerId: input.owner.id,
+      })
+      return
+    }
+    const selected = tickets[num - 1]
+    input.conv.data.selectedTicketId = selected.id
+    input.conv.step = 'select_status'
+    input.conv.updatedAt = nowMs()
+    conversations.set(input.sender, input.conv)
+
+    const statusOptions = [
+      { actionId: 'ts_open', label: '🟠 Open' },
+      { actionId: 'ts_in_progress', label: '🟡 In Progress' },
+      { actionId: 'ts_resolved', label: '🟢 Resolved' },
+      { actionId: 'ts_closed', label: '✅ Closed' },
+    ]
+    await input.sendText({
+      to: input.sender,
+      text: [`"${selected.subject}" — current: ${selected.currentStatus}`, '', ...statusOptions.map((o, i) => `${i + 1}. ${o.label}`), '', 'Reply with a number to set status.'].join('\n'),
+      organizationId: input.owner.organization_id,
+      ownerId: input.owner.id,
+    })
+    setPendingMenu(input.sender, statusOptions)
+    return
+  }
+
+  if (input.conv.step === 'select_status') {
+    const statusMap: Record<string, 'open' | 'in_progress' | 'resolved' | 'closed'> = {
+      open: 'open', '1': 'open',
+      in_progress: 'in_progress', '2': 'in_progress', inprogress: 'in_progress',
+      resolved: 'resolved', '3': 'resolved',
+      closed: 'closed', '4': 'closed',
+    }
+    const status = statusMap[lc]
+    if (!status) {
+      await input.sendText({ to: input.sender, text: 'Reply with 1 (Open), 2 (In Progress), 3 (Resolved), or 4 (Closed).', organizationId: input.owner.organization_id, ownerId: input.owner.id })
+      return
+    }
+    clearConversation(input.sender)
+    clearPendingMenu(input.sender)
+    await handleStatusCommand({ ...ctx, command: { ticketId: input.conv.data.selectedTicketId!, status } })
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Approvals Review Flow
+// ---------------------------------------------------------------------------
+
+async function processApprovalsConversation(input: {
+  sender: string
+  conv: ApprovalsConversation
+  text: string
+  owner: OwnerIdentity
+  sendText: SendTextFn
+  sendAction?: SendActionFn
+}) {
+  const ctx = { owner: input.owner, sender: input.sender, sendText: input.sendText, sendAction: input.sendAction }
+  const value = input.text.trim()
+  const lc = value.toLowerCase()
+
+  if (input.conv.step === 'select_approval') {
+    const approvals = input.conv.data.approvals
+    const num = Number(value)
+    if (!Number.isInteger(num) || num < 1 || num > approvals.length) {
+      await input.sendText({ to: input.sender, text: `Reply with a number between 1 and ${approvals.length}.`, organizationId: input.owner.organization_id, ownerId: input.owner.id })
+      return
+    }
+    const selected = approvals[num - 1]
+    input.conv.data.selectedApprovalId = selected.id
+    input.conv.step = 'select_action'
+    input.conv.updatedAt = nowMs()
+    conversations.set(input.sender, input.conv)
+
+    const actionOptions = [
+      { actionId: 'ar_approve', label: '✅ Approve' },
+      { actionId: 'ar_reject', label: '❌ Reject' },
+    ]
+    await input.sendText({
+      to: input.sender,
+      text: [`${selected.tenantName} — ${selected.amount} (due ${selected.dueDate})`, '', '1. ✅ Approve', '2. ❌ Reject'].join('\n'),
+      organizationId: input.owner.organization_id,
+      ownerId: input.owner.id,
+    })
+    setPendingMenu(input.sender, actionOptions)
+    return
+  }
+
+  if (input.conv.step === 'select_action') {
+    const approvalId = input.conv.data.selectedApprovalId!
+    if (lc === '1' || lc === 'approve' || lc === 'yes') {
+      clearConversation(input.sender)
+      clearPendingMenu(input.sender)
+      await handleReviewCommand({ ...ctx, command: { action: 'approve', approvalId, message: null } })
+      return
+    }
+    if (lc === '2' || lc === 'reject' || lc === 'no') {
+      input.conv.step = 'select_rejection'
+      input.conv.updatedAt = nowMs()
+      conversations.set(input.sender, input.conv)
+      const rejOptions = [
+        { actionId: 'rr_proof', label: '🧾 Proof Missing' },
+        { actionId: 'rr_amount', label: '💰 Amount Wrong' },
+        { actionId: 'rr_cycle', label: '📅 Wrong Cycle' },
+      ]
+      await input.sendText({
+        to: input.sender,
+        text: ['Reason for rejection:', '', '1. 🧾 Proof Missing', '2. 💰 Amount Wrong', '3. 📅 Wrong Cycle'].join('\n'),
+        organizationId: input.owner.organization_id,
+        ownerId: input.owner.id,
+      })
+      setPendingMenu(input.sender, rejOptions)
+      return
+    }
+    await input.sendText({ to: input.sender, text: 'Reply 1 to Approve or 2 to Reject.', organizationId: input.owner.organization_id, ownerId: input.owner.id })
+    return
+  }
+
+  if (input.conv.step === 'select_rejection') {
+    const reasonMap: Record<string, string> = {
+      '1': 'proof', proof: 'proof',
+      '2': 'amount', amount: 'amount',
+      '3': 'cycle', cycle: 'cycle',
+    }
+    const reason = reasonMap[lc]
+    if (!reason) {
+      await input.sendText({ to: input.sender, text: 'Reply 1 (Proof Missing), 2 (Amount Wrong), or 3 (Wrong Cycle).', organizationId: input.owner.organization_id, ownerId: input.owner.id })
+      return
+    }
+    clearConversation(input.sender)
+    clearPendingMenu(input.sender)
+    await handleReviewCommand({ ...ctx, command: { action: 'reject', approvalId: input.conv.data.selectedApprovalId!, message: reason } })
+  }
+}
+
 export async function processWhatsAppOwnerBotMessage(input: {
   sender: string
   text: string | null
@@ -1664,10 +1914,11 @@ export async function processWhatsAppOwnerBotMessage(input: {
 
   const ctx = { owner, sender: input.sender, sendText: input.sendText, sendAction: input.sendAction }
 
-  // ── Button callback routing (from interactive button taps) ──
+  // ── Button callback routing (explicit IDs like mn|stats) ──
   const buttonHandled = await routeButtonCallback(incoming, ctx)
   if (buttonHandled) return
 
+  // ── Active flow routing ──
   if (conv) {
     if (conv.flow === 'add_property') {
       await processAddPropertyConversation({ sender: input.sender, conv, text: incoming, sendText: input.sendText, sendAction: input.sendAction })
@@ -1677,6 +1928,75 @@ export async function processWhatsAppOwnerBotMessage(input: {
       await processAddTenantConversation({ sender: input.sender, conv, text: incoming, sendText: input.sendText, sendAction: input.sendAction })
       return
     }
+    if (conv.flow === 'ticket_reply') {
+      // Check if user selected a quick action from the pending menu first
+      const pendingNum = Number(incoming.trim())
+      const pendingMenu = getPendingMenu(input.sender)
+      if (pendingMenu && Number.isInteger(pendingNum) && pendingNum >= 1 && pendingNum <= pendingMenu.length) {
+        const chosen = pendingMenu[pendingNum - 1]
+        // Quick actions after ticket list: reply, status, or menu
+        if (chosen.actionId === 'flow|ticket_reply') {
+          clearPendingMenu(input.sender)
+          // conv already has tickets loaded; switch to select_ticket step
+          conv.step = 'select_ticket'
+          conv.updatedAt = nowMs()
+          conversations.set(input.sender, conv)
+          const tickets = conv.data.tickets
+          await input.sendText({
+            to: input.sender,
+            text: ['Which ticket to reply to?', '', ...tickets.map((t, i) => `${i + 1}. ${t.subject} (${t.tenantName})`)].join('\n'),
+            organizationId: owner.organization_id,
+            ownerId: owner.id,
+          })
+          return
+        }
+        if (chosen.actionId === 'flow|ticket_status') {
+          clearPendingMenu(input.sender)
+          const tickets = conv.data.tickets
+          setConversation(input.sender, {
+            flow: 'ticket_status',
+            ownerId: owner.id,
+            organizationId: owner.organization_id,
+            step: 'select_ticket',
+            data: { tickets },
+          })
+          await input.sendText({
+            to: input.sender,
+            text: ['Which ticket to update?', '', ...tickets.map((t, i) => `${i + 1}. ${t.subject} — ${t.currentStatus} (${t.tenantName})`)].join('\n'),
+            organizationId: owner.organization_id,
+            ownerId: owner.id,
+          })
+          return
+        }
+        // Fall through to pending menu handler below for mn|menu etc.
+        clearPendingMenu(input.sender)
+        const handled2 = await routeButtonCallback(chosen.actionId, ctx)
+        if (handled2) return
+      }
+      // conv is in select_ticket or enter_reply step
+      if (conv.step === 'select_ticket' || conv.step === 'enter_reply') {
+        await processTicketReplyConversation({ sender: input.sender, conv, text: incoming, owner, sendText: input.sendText, sendAction: input.sendAction })
+        return
+      }
+    }
+    if (conv.flow === 'ticket_status') {
+      await processTicketStatusConversation({ sender: input.sender, conv, text: incoming, owner, sendText: input.sendText, sendAction: input.sendAction })
+      return
+    }
+    if (conv.flow === 'approvals_review') {
+      await processApprovalsConversation({ sender: input.sender, conv, text: incoming, owner, sendText: input.sendText, sendAction: input.sendAction })
+      return
+    }
+  }
+
+  // ── Pending menu: numbered responses (1-9) ──
+  const numInput = Number(incoming.trim())
+  const pendingMenu = getPendingMenu(input.sender)
+  if (pendingMenu && Number.isInteger(numInput) && numInput >= 1 && numInput <= pendingMenu.length) {
+    clearPendingMenu(input.sender)
+    const chosen = pendingMenu[numInput - 1]
+    const handled = await routeButtonCallback(chosen.actionId, ctx)
+    if (handled) return
   }
 
   // ── Slash command routing (typed commands) ──
@@ -1691,42 +2011,53 @@ export async function processWhatsAppOwnerBotMessage(input: {
     return
   }
 
-  if (commandToken === '/start' || commandToken === '/menu') {
+  // ── Natural language keywords (no slash required) ──
+  const lcIncoming = incoming.toLowerCase().trim()
+  const greetings = ['hi', 'hello', 'hey', 'start', 'help', 'menu', 'hii', 'helo', 'helo', 'hola']
+  if (greetings.includes(lcIncoming) || commandToken === '/start' || commandToken === '/menu' || commandToken === '/help') {
     await sendMenu(ctx)
     return
   }
 
-  if (commandToken === '/ownerstats' || commandToken === '/stats') {
+  if (lcIncoming === 'stats' || lcIncoming === 'dashboard' || commandToken === '/ownerstats' || commandToken === '/stats') {
     await handleOwnerStats(ctx)
     return
   }
-
-  if (commandToken === '/tickets') {
+  if (lcIncoming === 'tickets' || lcIncoming === 'ticket' || commandToken === '/tickets') {
     const { filter, page } = parseTicketsCommand(incoming)
     await handleTicketsCommand({ ...ctx, filter, page })
     return
   }
-
-  if (commandToken === '/tenants') {
+  if (lcIncoming === 'tenants' || lcIncoming === 'tenant' || commandToken === '/tenants') {
     await handleTenantsCommand(ctx)
     return
   }
-
-  if (commandToken === '/properties') {
+  if (lcIncoming === 'properties' || lcIncoming === 'property' || commandToken === '/properties') {
     await handlePropertiesCommand(ctx)
     return
   }
-
-  if (commandToken === '/approvals') {
+  if (lcIncoming === 'approvals' || lcIncoming === 'approval' || commandToken === '/approvals') {
     await handleApprovalsCommand(ctx)
     return
   }
-
-  if (commandToken === '/portfolio') {
+  if (lcIncoming === 'portfolio' || commandToken === '/portfolio') {
     await handlePortfolioCommand(ctx)
     return
   }
+  if (lcIncoming === 'add property' || lcIncoming === 'addproperty' || commandToken === '/addproperty') {
+    await startAddProperty(ctx)
+    return
+  }
+  if (lcIncoming === 'add tenant' || lcIncoming === 'addtenant' || commandToken === '/addtenant') {
+    await startAddTenant(ctx)
+    return
+  }
+  if (commandToken === '/disconnect' || commandToken === '/stop') {
+    await disconnectOwnerWhatsAppLink(ctx)
+    return
+  }
 
+  // ── Legacy slash commands (still work for power users) ──
   const statusCommand = parseStatusCommand(incoming)
   if (statusCommand) {
     await handleStatusCommand({ ...ctx, command: statusCommand })
@@ -1745,28 +2076,6 @@ export async function processWhatsAppOwnerBotMessage(input: {
     return
   }
 
-  if (commandToken === '/addproperty') {
-    await startAddProperty(ctx)
-    return
-  }
-
-  if (commandToken === '/addtenant') {
-    await startAddTenant(ctx)
-    return
-  }
-
-  if (commandToken === '/disconnect' || commandToken === '/stop') {
-    await disconnectOwnerWhatsAppLink(ctx)
-    return
-  }
-
-  if (incoming.startsWith('/')) {
-    await input.sendText({
-      to: input.sender,
-      text: `Unknown command: ${incoming}\n\n${helpText()}`,
-      organizationId: owner.organization_id,
-      ownerId: owner.id,
-      metadata: { event: 'whatsapp_unknown_command' },
-    })
-  }
+  // ── Catch-all: show menu for anything unrecognized ──
+  await sendMenu(ctx)
 }
