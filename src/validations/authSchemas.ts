@@ -56,3 +56,12 @@ export const passwordResetConfirmSchema = z
     password: z.string().min(8),
   })
   .strict()
+
+export const ownerWhatsAppSendOtpSchema = z.object({
+  phone: z.string().trim().regex(/^\+[1-9]\d{6,14}$/, 'E.164 format required (+country code + number)'),
+})
+
+export const ownerWhatsAppVerifyOtpSchema = z.object({
+  phone: z.string().trim().regex(/^\+[1-9]\d{6,14}$/, 'E.164 format required (+country code + number)'),
+  code: z.string().trim().regex(/^\d{6}$/, '6-digit code required'),
+})

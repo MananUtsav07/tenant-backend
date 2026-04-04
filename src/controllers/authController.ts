@@ -42,7 +42,25 @@ async function trackAnalyticsSafe(input: {
   }
 }
 
-async function sendOwnerWhatsAppOnboarding(input: {
+export function buildOwnerOnboardingMessage(ownerName: string): string {
+  return [
+    `👋 Hi ${ownerName}, your WhatsApp is connected to Prophives!`,
+    '',
+    "Here's what you can do — just type any keyword:",
+    '',
+    '📊 *stats* — Dashboard overview',
+    '🎫 *tickets* — View & reply to tickets',
+    '👥 *tenants* — List tenants',
+    '🏠 *properties* — Property snapshot',
+    '✅ *approvals* — Review rent payments',
+    '📋 *menu* — Full menu',
+    '',
+    "You'll also get rent payment alerts and ticket updates here.",
+    'Type *menu* anytime to get started.',
+  ].join('\n')
+}
+
+export async function sendOwnerWhatsAppOnboarding(input: {
   recipient: string
   ownerId: string
   organizationId: string
@@ -260,36 +278,9 @@ export const patchOwnerMe = asyncHandler(async (request: Request, response: Resp
 
   if (patch.support_whatsapp) {
     const ownerName = owner.full_name ?? owner.company_name ?? 'there'
-    const onboardingMessage = [
-      `👋 Welcome to Prophives, ${ownerName}!`,
-      '',
-      'Your WhatsApp number is now linked to your owner account. You can manage your properties directly from this chat.',
-      '',
-      '📊 View & Manage',
-      '/ownerstats — Quick dashboard stats',
-      '/tickets — Browse support tickets',
-      '/tenants — View your tenants',
-      '/properties — Property snapshot',
-      '/approvals — Pending rent approvals',
-      '/portfolio — Monthly portfolio summary',
-      '/menu — Show main menu',
-      '',
-      '✏️ Actions',
-      '/reply <ticket-id> <message> — Reply to a ticket',
-      '/approve <approval-id> — Approve rent payment',
-      '/reject <approval-id> <reason> — Reject rent payment',
-      '/status <ticket-id> <status> — Update ticket status',
-      '',
-      '➕ Create',
-      '/addproperty — Add a new property',
-      '/addtenant — Add a new tenant',
-      '',
-      'Type /help anytime for the full command list.',
-    ].join('\n')
-
     void sendOwnerWhatsAppOnboarding({
         recipient: patch.support_whatsapp,
-        text: onboardingMessage,
+        text: buildOwnerOnboardingMessage(ownerName),
         ownerId: owner.id,
         organizationId: owner.organization_id,
       })

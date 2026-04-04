@@ -77,9 +77,10 @@ export const getOwnerIntegrations = asyncHandler(async (request: Request, respon
     ok: true,
     integrations: {
       whatsapp: {
-        configured: env.WHATSAPP_PROVIDER === 'meta',
+        configured: env.WHATSAPP_PROVIDER === 'meta' || env.WHATSAPP_PROVIDER === 'twilio',
         provider: env.WHATSAPP_PROVIDER ?? null,
-        live: env.WHATSAPP_PROVIDER === 'meta' && !!env.WHATSAPP_ACCESS_TOKEN,
+        live: (env.WHATSAPP_PROVIDER === 'meta' && !!env.WHATSAPP_ACCESS_TOKEN)
+           || (env.WHATSAPP_PROVIDER === 'twilio' && !!env.TWILIO_ACCOUNT_SID),
         linked: Boolean(whatsappLink?.is_active && whatsappLink.phone_number),
         linked_number: whatsappLink?.phone_number ?? null,
       },

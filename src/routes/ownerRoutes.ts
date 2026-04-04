@@ -61,6 +61,8 @@ import {
   postOwnerTicketReply,
   postOwnerAutomationCashFlowGenerateController,
   postOwnerTelegramDisconnect,
+  postOwnerWhatsAppSendOtp,
+  postOwnerWhatsAppVerifyOtp,
   putOwnerNotificationPreferencesController,
   postOwnerTenantConditionReportController,
   processReminders,
@@ -124,6 +126,8 @@ export function createOwnerRouter() {
   router.get('/telegram/onboarding', getOwnerTelegramOnboarding)
   router.post('/telegram/disconnect', postOwnerTelegramDisconnect)
   router.get('/telegram/delivery-logs', getOwnerTelegramDeliveryLogsController)
+  router.post('/whatsapp/send-otp', postOwnerWhatsAppSendOtp)
+  router.post('/whatsapp/verify-otp', postOwnerWhatsAppVerifyOtp)
 
   router.get('/dashboard-summary', getOwnerSummary)
   router.get('/rent-payment-approvals', getOwnerRentPaymentApprovals)
