@@ -261,7 +261,7 @@ export class TwilioWhatsAppProvider implements WhatsAppProvider {
       const whatsapp = registry.getAutomationProviderRegistry().whatsapp
 
       await processWhatsAppOwnerBotMessage({
-        senderPhone: from,
+        sender: from,
         text,
         sendText: async ({ to: recipient, text: msg }) => {
           await whatsapp.sendFreeform({ recipient, text: msg })
