@@ -12,6 +12,7 @@ import type {
   ProviderResult,
   StorageProvider,
 } from './contracts.js'
+import { TwilioWhatsAppProvider } from './twilioWhatsappProvider.js'
 import { DefaultWhatsAppProvider } from './whatsappProvider.js'
 
 function skipped(provider: string, reason: string, metadata?: Record<string, unknown>): ProviderResult {
@@ -282,9 +283,16 @@ class DefaultCalendarProvider implements CalendarProvider {
   }
 }
 
+function createWhatsAppProvider() {
+  if (env.WHATSAPP_PROVIDER === 'twilio') {
+    return new TwilioWhatsAppProvider()
+  }
+  return new DefaultWhatsAppProvider()
+}
+
 const defaultProviderRegistry: AutomationProviderRegistry = {
   email: new DefaultEmailProvider(),
-  whatsapp: new DefaultWhatsAppProvider(),
+  whatsapp: createWhatsAppProvider(),
   ai: new DefaultAIProvider(),
   documents: new DefaultDocumentProvider(),
   storage: new DefaultStorageProvider(),
