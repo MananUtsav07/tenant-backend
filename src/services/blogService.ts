@@ -1,7 +1,5 @@
-import type { PostgrestError } from '@supabase/supabase-js'
-
-import { AppError } from '../lib/errors.js'
-import { supabaseAdmin } from '../lib/supabase.js'
+import { prisma } from '../lib/db.js'
+import type { Prisma } from '@prisma/client'
 
 type BlogListQuery = {
   page: number
@@ -12,59 +10,61 @@ type BlogListQuery = {
   include_unpublished?: boolean
 }
 
-function throwIfError(error: PostgrestError | null, message: string): void {
-  if (error) {
-    throw new AppError(message, 500, error.message)
-  }
-}
-
 function escapeSearchTerm(term: string): string {
   return term.replace(/[%_]/g, '').replaceAll(',', ' ').trim()
 }
 
-const blogSelectFields =
-  'id, title, slug, content, excerpt, cover_image, author, published, created_at, updated_at'
+const blogSelect = {
+  id: true,
+  title: true,
+  slug: true,
+  content: true,
+  excerpt: true,
+  cover_image: true,
+  author: true,
+  published: true,
+  created_at: true,
+  updated_at: true,
+} satisfies Prisma.blog_postsSelect
 
 export async function listBlogPosts(query: BlogListQuery) {
-  const from = (query.page - 1) * query.page_size
-  const to = from + query.page_size - 1
-
-  let request = supabaseAdmin
-    .from('blog_posts')
-    .select(blogSelectFields, { count: 'exact' })
-    .order(query.sort_by, { ascending: query.sort_order === 'asc' })
-    .range(from, to)
+  const skip = (query.page - 1) * query.page_size
+  const where: Prisma.blog_postsWhereInput = {}
 
   if (!query.include_unpublished) {
-    request = request.eq('published', true)
+    where.published = true
   }
 
   if (query.search && query.search.trim().length > 0) {
     const escaped = escapeSearchTerm(query.search)
     if (escaped.length > 0) {
-      request = request.or(`title.ilike.%${escaped}%,excerpt.ilike.%${escaped}%,author.ilike.%${escaped}%`)
+      where.OR = [
+        { title: { contains: escaped, mode: 'insensitive' } },
+        { excerpt: { contains: escaped, mode: 'insensitive' } },
+        { author: { contains: escaped, mode: 'insensitive' } },
+      ]
     }
   }
 
-  const { data, error, count } = await request
-  throwIfError(error, 'Failed to list blog posts')
+  const [items, total] = await prisma.$transaction([
+    prisma.blog_posts.findMany({
+      select: blogSelect,
+      where,
+      orderBy: { [query.sort_by]: query.sort_order },
+      skip,
+      take: query.page_size,
+    }),
+    prisma.blog_posts.count({ where }),
+  ])
 
-  return {
-    items: data ?? [],
-    total: count ?? 0,
-  }
+  return { items, total }
 }
 
 export async function getPublishedBlogPostBySlug(slug: string) {
-  const { data, error } = await supabaseAdmin
-    .from('blog_posts')
-    .select(blogSelectFields)
-    .eq('slug', slug)
-    .eq('published', true)
-    .maybeSingle()
-
-  throwIfError(error, 'Failed to load blog post')
-  return data
+  return prisma.blog_posts.findFirst({
+    select: blogSelect,
+    where: { slug, published: true },
+  })
 }
 
 export async function createBlogPost(input: {
@@ -76,9 +76,8 @@ export async function createBlogPost(input: {
   author?: string
   published?: boolean
 }) {
-  const { data, error } = await supabaseAdmin
-    .from('blog_posts')
-    .insert({
+  return prisma.blog_posts.create({
+    data: {
       title: input.title,
       slug: input.slug,
       content: input.content,
@@ -86,15 +85,9 @@ export async function createBlogPost(input: {
       cover_image: input.cover_image ?? null,
       author: input.author ?? 'Prophives Team',
       published: input.published ?? false,
-    })
-    .select(blogSelectFields)
-    .single()
-
-  throwIfError(error, 'Failed to create blog post')
-  if (!data) {
-    throw new AppError('Failed to create blog post', 500)
-  }
-  return data
+    },
+    select: blogSelect,
+  })
 }
 
 export async function updateBlogPost(
@@ -109,19 +102,14 @@ export async function updateBlogPost(
     published: boolean
   }>,
 ) {
-  const { data, error } = await supabaseAdmin
-    .from('blog_posts')
-    .update(patch)
-    .eq('id', blogPostId)
-    .select(blogSelectFields)
-    .maybeSingle()
-
-  throwIfError(error, 'Failed to update blog post')
-  return data
+  return prisma.blog_posts.update({
+    where: { id: blogPostId },
+    data: patch,
+    select: blogSelect,
+  })
 }
 
 export async function deleteBlogPost(blogPostId: string) {
-  const { error, count } = await supabaseAdmin.from('blog_posts').delete({ count: 'exact' }).eq('id', blogPostId)
-  throwIfError(error, 'Failed to delete blog post')
-  return count ?? 0
+  await prisma.blog_posts.delete({ where: { id: blogPostId } })
+  return 1
 }

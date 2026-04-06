@@ -1,7 +1,5 @@
-import type { PostgrestError } from '@supabase/supabase-js'
-
 import { AppError } from '../lib/errors.js'
-import { supabaseAdmin } from '../lib/supabase.js'
+import { prisma } from '../lib/db.js'
 import { getAutomationProviderRegistry } from './automation/providers/providerRegistry.js'
 
 const EMPLOYMENT_DOCUMENT_TYPES = new Set(['salary_slip', 'employment_letter'])
@@ -175,10 +173,12 @@ export type AdminScreeningOverview = {
   page_size: number
 }
 
-function throwIfError(error: PostgrestError | null, message: string): void {
-  if (error) {
-    throw new AppError(message, 500, error.message)
-  }
+function toISO(d: Date | null | undefined): string | null {
+  return d ? d.toISOString() : null
+}
+
+function toISODate(d: Date | null | undefined): string | null {
+  return d ? d.toISOString().slice(0, 10) : null
 }
 
 function asNullableString(value: string | null | undefined) {
@@ -273,69 +273,52 @@ function buildQuestionnairePayload(input: {
 }
 
 async function loadPropertyContext(organizationId: string, propertyId: string) {
-  const { data, error } = await supabaseAdmin
-    .from('properties')
-    .select('id, organization_id, owner_id, property_name, address, unit_number')
-    .eq('organization_id', organizationId)
-    .eq('id', propertyId)
-    .maybeSingle()
-
-  throwIfError(error, 'Failed to load property context')
-  return (data ?? null) as PropertyRow | null
+  const data = await prisma.properties.findFirst({
+    select: { id: true, organization_id: true, owner_id: true, property_name: true, address: true, unit_number: true },
+    where: { organization_id: organizationId, id: propertyId },
+  })
+  return data as PropertyRow | null
 }
 
 async function loadOwnerContext(organizationId: string, ownerId: string) {
-  const { data, error } = await supabaseAdmin
-    .from('owners')
-    .select('id, full_name, company_name, email')
-    .eq('organization_id', organizationId)
-    .eq('id', ownerId)
-    .maybeSingle()
-
-  throwIfError(error, 'Failed to load owner context')
-  return (data ?? null) as (OwnerRow & { id: string }) | null
+  const data = await prisma.owners.findFirst({
+    select: { id: true, full_name: true, company_name: true, email: true },
+    where: { organization_id: organizationId, id: ownerId },
+  })
+  return data as (OwnerRow & { id: string }) | null
 }
 
 async function loadVacancyCampaignContext(organizationId: string, campaignId: string) {
-  const { data, error } = await supabaseAdmin
-    .from('vacancy_campaigns')
-    .select('id, organization_id, owner_id, property_id')
-    .eq('organization_id', organizationId)
-    .eq('id', campaignId)
-    .maybeSingle()
-
-  throwIfError(error, 'Failed to load vacancy campaign context')
-  return data ?? null
+  const data = await prisma.vacancy_campaigns.findFirst({
+    select: { id: true, organization_id: true, owner_id: true, property_id: true },
+    where: { organization_id: organizationId, id: campaignId },
+  })
+  return data
 }
 
 async function loadVacancyApplicationContext(organizationId: string, applicationId: string) {
-  const { data, error } = await supabaseAdmin
-    .from('vacancy_applications')
-    .select('id, organization_id, owner_id, property_id, vacancy_campaign_id, applicant_name, desired_move_in_date, monthly_salary, notes')
-    .eq('organization_id', organizationId)
-    .eq('id', applicationId)
-    .maybeSingle()
-
-  throwIfError(error, 'Failed to load vacancy application context')
-  return (data ?? null) as VacancyApplicationContextRow | null
+  const data = await prisma.vacancy_applications.findFirst({
+    select: { id: true, organization_id: true, owner_id: true, property_id: true, vacancy_campaign_id: true, applicant_name: true, desired_move_in_date: true, monthly_salary: true, notes: true },
+    where: { organization_id: organizationId, id: applicationId },
+  })
+  if (!data) return null
+  return {
+    ...data,
+    desired_move_in_date: toISODate(data.desired_move_in_date as Date | null),
+    monthly_salary: data.monthly_salary != null ? Number(data.monthly_salary) : null,
+  } as VacancyApplicationContextRow
 }
 
 async function resolveDefaultTargetRent(organizationId: string, propertyId: string | null) {
-  if (!propertyId) {
-    return null
-  }
+  if (!propertyId) return null
 
-  const { data, error } = await supabaseAdmin
-    .from('tenants')
-    .select('monthly_rent')
-    .eq('organization_id', organizationId)
-    .eq('property_id', propertyId)
-    .order('created_at', { ascending: false })
-    .limit(1)
-
-  throwIfError(error, 'Failed to resolve default target rent')
-  const value = data?.[0]?.monthly_rent
-  return typeof value === 'number' ? roundToTwo(value) : null
+  const row = await prisma.tenants.findFirst({
+    select: { monthly_rent: true },
+    where: { organization_id: organizationId, property_id: propertyId },
+    orderBy: { created_at: 'desc' },
+  })
+  const value = row?.monthly_rent
+  return value != null ? roundToTwo(Number(value)) : null
 }
 
 async function createScreeningEvent(input: {
@@ -349,19 +332,19 @@ async function createScreeningEvent(input: {
   message: string
   metadata?: Record<string, unknown>
 }) {
-  const { error } = await supabaseAdmin.from('screening_events').insert({
-    screening_applicant_id: input.applicantId,
-    organization_id: input.organizationId,
-    actor_role: input.actorRole,
-    actor_owner_id: input.actorRole === 'owner' ? input.actorOwnerId ?? null : null,
-    actor_admin_id: input.actorRole === 'admin' ? input.actorAdminId ?? null : null,
-    event_type: input.eventType,
-    title: input.title,
-    message: input.message,
-    metadata: input.metadata ?? {},
+  await prisma.screening_events.create({
+    data: {
+      screening_applicant_id: input.applicantId,
+      organization_id: input.organizationId,
+      actor_role: input.actorRole,
+      actor_owner_id: input.actorRole === 'owner' ? input.actorOwnerId ?? null : null,
+      actor_admin_id: input.actorRole === 'admin' ? input.actorAdminId ?? null : null,
+      event_type: input.eventType,
+      title: input.title,
+      message: input.message,
+      metadata: (input.metadata ?? {}) as object,
+    },
   })
-
-  throwIfError(error, 'Failed to create screening event')
 }
 
 async function upsertQuestionnaireAnswers(input: {
@@ -369,37 +352,67 @@ async function upsertQuestionnaireAnswers(input: {
   applicantId: string
   questionnaire: ReturnType<typeof buildQuestionnairePayload>
 }) {
-  if (input.questionnaire.length === 0) {
-    return
+  if (input.questionnaire.length === 0) return
+
+  for (const answer of input.questionnaire) {
+    await prisma.screening_questionnaire_answers.upsert({
+      where: { screening_applicant_id_answer_key: { screening_applicant_id: input.applicantId, answer_key: answer.key } },
+      create: {
+        screening_applicant_id: input.applicantId,
+        organization_id: input.organizationId,
+        answer_key: answer.key,
+        answer_label: answer.label,
+        answer_value: answer.value,
+        is_verified: answer.is_verified,
+      },
+      update: {
+        answer_label: answer.label,
+        answer_value: answer.value,
+        is_verified: answer.is_verified,
+        updated_at: new Date(),
+      },
+    })
   }
-
-  const { error } = await supabaseAdmin.from('screening_questionnaire_answers').upsert(
-    input.questionnaire.map((answer) => ({
-      screening_applicant_id: input.applicantId,
-      organization_id: input.organizationId,
-      answer_key: answer.key,
-      answer_label: answer.label,
-      answer_value: answer.value,
-      is_verified: answer.is_verified,
-    })),
-    {
-      onConflict: 'screening_applicant_id,answer_key',
-    },
-  )
-
-  throwIfError(error, 'Failed to store screening questionnaire answers')
 }
 
 async function loadApplicantDocuments(applicantId: string, organizationId: string) {
-  const { data, error } = await supabaseAdmin
-    .from('screening_documents')
-    .select('*')
-    .eq('organization_id', organizationId)
-    .eq('screening_applicant_id', applicantId)
-    .order('created_at', { ascending: false })
+  const data = await prisma.screening_documents.findMany({
+    where: { organization_id: organizationId, screening_applicant_id: applicantId },
+    orderBy: { created_at: 'desc' },
+  })
+  return data.map((row) => ({
+    ...row,
+    file_size_bytes: row.file_size_bytes != null ? Number(row.file_size_bytes) : null,
+    created_at: toISO(row.created_at) ?? '',
+    updated_at: toISO(row.updated_at) ?? '',
+  })) as unknown as ScreeningDocumentRow[]
+}
 
-  throwIfError(error, 'Failed to load screening documents')
-  return (data ?? []) as ScreeningDocumentRow[]
+const applicantSelect = {
+  id: true, organization_id: true, owner_id: true, property_id: true, vacancy_campaign_id: true,
+  vacancy_application_id: true, enquiry_source: true, source_reference: true, applicant_name: true,
+  email: true, phone: true, employer: true, monthly_salary: true, current_residence: true,
+  reason_for_moving: true, number_of_occupants: true, desired_move_in_date: true, target_rent_amount: true,
+  identification_status: true, employment_verification_status: true, affordability_ratio: true,
+  recommendation_category: true, recommendation_summary: true, recommendation_reasons: true,
+  recommendation_generated_at: true, ai_screening_status: true, viewing_decision: true,
+  final_disposition: true, owner_decision_notes: true, created_at: true, updated_at: true,
+  properties: { select: { id: true, organization_id: true, owner_id: true, property_name: true, address: true, unit_number: true } },
+  owners: { select: { id: true, full_name: true, company_name: true, email: true } },
+  organizations: { select: { name: true, slug: true } },
+} as const
+
+function serializeApplicantRow(row: Record<string, unknown>): ScreeningApplicantRow {
+  return {
+    ...(row as ScreeningApplicantRow),
+    monthly_salary: row.monthly_salary != null ? Number(row.monthly_salary) : null,
+    target_rent_amount: row.target_rent_amount != null ? Number(row.target_rent_amount) : null,
+    affordability_ratio: row.affordability_ratio != null ? Number(row.affordability_ratio) : null,
+    desired_move_in_date: toISODate(row.desired_move_in_date as Date | null),
+    recommendation_generated_at: toISO(row.recommendation_generated_at as Date | null),
+    created_at: toISO(row.created_at as Date) ?? '',
+    updated_at: toISO(row.updated_at as Date) ?? '',
+  }
 }
 
 async function loadApplicantDetailRow(input: {
@@ -407,21 +420,12 @@ async function loadApplicantDetailRow(input: {
   organizationId: string
   ownerId?: string
 }) {
-  let request = supabaseAdmin
-    .from('screening_applicants')
-    .select(
-      'id, organization_id, owner_id, property_id, vacancy_campaign_id, vacancy_application_id, enquiry_source, source_reference, applicant_name, email, phone, employer, monthly_salary, current_residence, reason_for_moving, number_of_occupants, desired_move_in_date, target_rent_amount, identification_status, employment_verification_status, affordability_ratio, recommendation_category, recommendation_summary, recommendation_reasons, recommendation_generated_at, ai_screening_status, viewing_decision, final_disposition, owner_decision_notes, created_at, updated_at, properties(id, organization_id, owner_id, property_name, address, unit_number), owners(id, full_name, company_name, email), organizations(name, slug)'
-    )
-    .eq('organization_id', input.organizationId)
-    .eq('id', input.applicantId)
+  const where: Record<string, unknown> = { organization_id: input.organizationId, id: input.applicantId }
+  if (input.ownerId) where.owner_id = input.ownerId
 
-  if (input.ownerId) {
-    request = request.eq('owner_id', input.ownerId)
-  }
-
-  const { data, error } = await request.maybeSingle()
-  throwIfError(error, 'Failed to load screening applicant')
-  return (data ?? null) as unknown as ScreeningApplicantRow | null
+  const data = await prisma.screening_applicants.findFirst({ select: applicantSelect, where })
+  if (!data) return null
+  return serializeApplicantRow(data as unknown as Record<string, unknown>)
 }
 
 function mapApplicantOverview(row: ScreeningApplicantRow): ScreeningApplicantOverview {
@@ -444,30 +448,23 @@ async function loadApplicantDetail(input: {
     return null
   }
 
-  const [answersResult, documents, eventsResult] = await Promise.all([
-    supabaseAdmin
-      .from('screening_questionnaire_answers')
-      .select('*')
-      .eq('organization_id', input.organizationId)
-      .eq('screening_applicant_id', input.applicantId)
-      .order('created_at', { ascending: true }),
+  const [answers, documents, events] = await Promise.all([
+    prisma.screening_questionnaire_answers.findMany({
+      where: { organization_id: input.organizationId, screening_applicant_id: input.applicantId },
+      orderBy: { created_at: 'asc' },
+    }),
     loadApplicantDocuments(input.applicantId, input.organizationId),
-    supabaseAdmin
-      .from('screening_events')
-      .select('*')
-      .eq('organization_id', input.organizationId)
-      .eq('screening_applicant_id', input.applicantId)
-      .order('created_at', { ascending: false }),
+    prisma.screening_events.findMany({
+      where: { organization_id: input.organizationId, screening_applicant_id: input.applicantId },
+      orderBy: { created_at: 'desc' },
+    }),
   ])
-
-  throwIfError(answersResult.error, 'Failed to load screening questionnaire answers')
-  throwIfError(eventsResult.error, 'Failed to load screening events')
 
   return {
     ...mapApplicantOverview(row),
-    questionnaire_answers: (answersResult.data ?? []) as ScreeningQuestionnaireAnswerRow[],
+    questionnaire_answers: answers.map((a) => ({ ...a, created_at: toISO(a.created_at) ?? '', updated_at: toISO(a.updated_at) ?? '' })) as unknown as ScreeningQuestionnaireAnswerRow[],
     documents,
-    events: (eventsResult.data ?? []) as ScreeningEventRow[],
+    events: events.map((e) => ({ ...e, created_at: toISO(e.created_at) ?? '' })) as unknown as ScreeningEventRow[],
   } satisfies ScreeningApplicantDetail
 }
 
@@ -671,20 +668,18 @@ export async function refreshScreeningRecommendation(input: {
     documents,
   })
 
-  const { error } = await supabaseAdmin
-    .from('screening_applicants')
-    .update({
+  await prisma.screening_applicants.update({
+    where: { id: input.applicantId },
+    data: {
       affordability_ratio: recommendation.ratio,
       recommendation_category: recommendation.category,
       recommendation_summary: recommendation.summary,
       recommendation_reasons: recommendation.reasons,
-      recommendation_generated_at: new Date().toISOString(),
+      recommendation_generated_at: new Date(),
       ai_screening_status: recommendation.aiStatus,
-    })
-    .eq('organization_id', input.organizationId)
-    .eq('id', input.applicantId)
-
-  throwIfError(error, 'Failed to update screening recommendation')
+      updated_at: new Date(),
+    },
+  })
 
   await createScreeningEvent({
     organizationId: input.organizationId,
@@ -819,20 +814,17 @@ export async function createScreeningApplicant(input: {
     employment_verification_status: input.payload.employment_verification_status ?? 'pending',
   }
 
-  const { data, error } = await supabaseAdmin
-    .from('screening_applicants')
-    .insert(insertPayload)
-    .select('id')
-    .single()
-
-  throwIfError(error, 'Failed to create screening applicant')
-  if (!data?.id) {
-    throw new AppError('Screening applicant id was not returned after creation', 500)
-  }
+  const created = await prisma.screening_applicants.create({
+    data: {
+      ...insertPayload,
+      desired_move_in_date: insertPayload.desired_move_in_date ? new Date(insertPayload.desired_move_in_date) : null,
+    },
+    select: { id: true },
+  })
 
   await upsertQuestionnaireAnswers({
     organizationId: input.organizationId,
-    applicantId: data.id,
+    applicantId: created.id,
     questionnaire: buildQuestionnairePayload({
       employer: insertPayload.employer,
       monthly_salary: insertPayload.monthly_salary,
@@ -847,7 +839,7 @@ export async function createScreeningApplicant(input: {
 
   await createScreeningEvent({
     organizationId: input.organizationId,
-    applicantId: data.id,
+    applicantId: created.id,
     actorRole: input.actorRole,
     actorOwnerId: input.actorOwnerId ?? resolvedOwnerId,
     actorAdminId: input.actorAdminId ?? null,
@@ -862,7 +854,7 @@ export async function createScreeningApplicant(input: {
   })
 
   const detail = await refreshScreeningRecommendation({
-    applicantId: data.id,
+    applicantId: created.id,
     organizationId: input.organizationId,
     ownerId: input.actorRole === 'owner' ? resolvedOwnerId : undefined,
     actorRole: input.actorRole,
@@ -950,14 +942,10 @@ export async function updateScreeningApplicant(input: {
     }
   }
 
-  const { error } = await supabaseAdmin
-    .from('screening_applicants')
-    .update(updatePayload)
-    .eq('organization_id', input.organizationId)
-    .eq('owner_id', input.ownerId)
-    .eq('id', input.applicantId)
-
-  throwIfError(error, 'Failed to update screening applicant')
+  await prisma.screening_applicants.update({
+    where: { id: input.applicantId },
+    data: { ...updatePayload, updated_at: new Date() },
+  })
 
   const merged = await loadApplicantDetailRow({
     applicantId: input.applicantId,
@@ -1034,21 +1022,21 @@ export async function addScreeningDocument(input: {
   }
 
   const verificationStatus = input.payload.verification_status ?? 'submitted'
-  const { error } = await supabaseAdmin.from('screening_documents').insert({
-    screening_applicant_id: input.applicantId,
-    organization_id: input.organizationId,
-    document_type: input.payload.document_type,
-    file_name: input.payload.file_name,
-    storage_path: input.payload.storage_path ?? null,
-    public_url: input.payload.public_url ?? null,
-    mime_type: input.payload.mime_type ?? null,
-    file_size_bytes: input.payload.file_size_bytes ?? null,
-    verification_status: verificationStatus,
-    extraction_status: 'not_requested',
-    notes: input.payload.notes ?? null,
+  await prisma.screening_documents.create({
+    data: {
+      screening_applicant_id: input.applicantId,
+      organization_id: input.organizationId,
+      document_type: input.payload.document_type,
+      file_name: input.payload.file_name,
+      storage_path: input.payload.storage_path ?? null,
+      public_url: input.payload.public_url ?? null,
+      mime_type: input.payload.mime_type ?? null,
+      file_size_bytes: input.payload.file_size_bytes ?? null,
+      verification_status: verificationStatus,
+      extraction_status: 'not_requested',
+      notes: input.payload.notes ?? null,
+    },
   })
-
-  throwIfError(error, 'Failed to attach screening document')
 
   const applicantPatch: Record<string, unknown> = {}
   if (input.payload.document_type === ID_DOCUMENT_TYPE) {
@@ -1059,14 +1047,10 @@ export async function addScreeningDocument(input: {
   }
 
   if (Object.keys(applicantPatch).length > 0) {
-    const { error: applicantError } = await supabaseAdmin
-      .from('screening_applicants')
-      .update(applicantPatch)
-      .eq('organization_id', input.organizationId)
-      .eq('owner_id', input.ownerId)
-      .eq('id', input.applicantId)
-
-    throwIfError(applicantError, 'Failed to sync screening applicant verification status')
+    await prisma.screening_applicants.update({
+      where: { id: input.applicantId },
+      data: { ...applicantPatch, updated_at: new Date() },
+    })
   }
 
   await createScreeningEvent({
@@ -1128,14 +1112,10 @@ export async function updateScreeningDecision(input: {
     updatePayload.owner_decision_notes = input.patch.owner_decision_notes ?? null
   }
 
-  const { error } = await supabaseAdmin
-    .from('screening_applicants')
-    .update(updatePayload)
-    .eq('organization_id', input.organizationId)
-    .eq('owner_id', input.ownerId)
-    .eq('id', input.applicantId)
-
-  throwIfError(error, 'Failed to update screening decision')
+  await prisma.screening_applicants.update({
+    where: { id: input.applicantId },
+    data: { ...updatePayload, updated_at: new Date() },
+  })
 
   if (input.patch.viewing_decision && input.patch.viewing_decision !== existing.viewing_decision) {
     await createScreeningEvent({
@@ -1189,24 +1169,13 @@ async function countApplicants(input: {
   recommendationCategory?: RecommendationCategory
   finalDisposition?: FinalDisposition
 }) {
-  let request = supabaseAdmin.from('screening_applicants').select('id', { count: 'exact', head: true })
+  const where: Record<string, unknown> = {}
+  if (input.organizationId) where.organization_id = input.organizationId
+  if (input.ownerId) where.owner_id = input.ownerId
+  if (input.recommendationCategory) where.recommendation_category = input.recommendationCategory
+  if (input.finalDisposition) where.final_disposition = input.finalDisposition
 
-  if (input.organizationId) {
-    request = request.eq('organization_id', input.organizationId)
-  }
-  if (input.ownerId) {
-    request = request.eq('owner_id', input.ownerId)
-  }
-  if (input.recommendationCategory) {
-    request = request.eq('recommendation_category', input.recommendationCategory)
-  }
-  if (input.finalDisposition) {
-    request = request.eq('final_disposition', input.finalDisposition)
-  }
-
-  const { count, error } = await request
-  throwIfError(error, 'Failed to count screening applicants')
-  return count ?? 0
+  return prisma.screening_applicants.count({ where })
 }
 
 async function listApplicantRows(input: {
@@ -1217,37 +1186,26 @@ async function listApplicantRows(input: {
   recommendationCategory?: RecommendationCategory
   finalDisposition?: FinalDisposition
 }) {
-  const from = (input.page - 1) * input.pageSize
-  const to = from + input.pageSize - 1
+  const where: Record<string, unknown> = {}
+  if (input.organizationId) where.organization_id = input.organizationId
+  if (input.ownerId) where.owner_id = input.ownerId
+  if (input.recommendationCategory) where.recommendation_category = input.recommendationCategory
+  if (input.finalDisposition) where.final_disposition = input.finalDisposition
 
-  let request = supabaseAdmin
-    .from('screening_applicants')
-    .select(
-      'id, organization_id, owner_id, property_id, vacancy_campaign_id, vacancy_application_id, enquiry_source, source_reference, applicant_name, email, phone, employer, monthly_salary, current_residence, reason_for_moving, number_of_occupants, desired_move_in_date, target_rent_amount, identification_status, employment_verification_status, affordability_ratio, recommendation_category, recommendation_summary, recommendation_reasons, recommendation_generated_at, ai_screening_status, viewing_decision, final_disposition, owner_decision_notes, created_at, updated_at, properties(id, organization_id, owner_id, property_name, address, unit_number), owners(id, full_name, company_name, email), organizations(name, slug)',
-      { count: 'exact' },
-    )
-    .order('created_at', { ascending: false })
-    .range(from, to)
-
-  if (input.organizationId) {
-    request = request.eq('organization_id', input.organizationId)
-  }
-  if (input.ownerId) {
-    request = request.eq('owner_id', input.ownerId)
-  }
-  if (input.recommendationCategory) {
-    request = request.eq('recommendation_category', input.recommendationCategory)
-  }
-  if (input.finalDisposition) {
-    request = request.eq('final_disposition', input.finalDisposition)
-  }
-
-  const { data, error, count } = await request
-  throwIfError(error, 'Failed to list screening applicants')
+  const [rawRows, total] = await Promise.all([
+    prisma.screening_applicants.findMany({
+      select: applicantSelect,
+      where,
+      orderBy: { created_at: 'desc' },
+      skip: (input.page - 1) * input.pageSize,
+      take: input.pageSize,
+    }),
+    prisma.screening_applicants.count({ where }),
+  ])
 
   return {
-    rows: (data ?? []) as unknown as ScreeningApplicantRow[],
-    total: count ?? 0,
+    rows: rawRows.map((r) => serializeApplicantRow(r as unknown as Record<string, unknown>)),
+    total,
   }
 }
 

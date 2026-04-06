@@ -1,9 +1,8 @@
-import type { PostgrestError } from '@supabase/supabase-js'
 import crypto from 'node:crypto'
 
 import { env } from '../../../config/env.js'
 import { AppError } from '../../../lib/errors.js'
-import { supabaseAdmin } from '../../../lib/supabase.js'
+import { prisma } from '../../../lib/db.js'
 import { recordAutomationError } from '../core/runLogger.js'
 import { recordIntegrationEvent, updateIntegrationEvent } from '../integrationEventService.js'
 import { resolveAutomationMessageTemplate } from '../messageTemplateService.js'
@@ -33,14 +32,7 @@ type InboundDeliveryLink = {
   id: string
 }
 
-const outboundSelect = 'id, integration_event_id'
-const inboundSelect = 'id'
 
-function throwIfError(error: PostgrestError | null, message: string) {
-  if (error) {
-    throw new AppError(message, 500, error.message)
-  }
-}
 
 function readString(value: unknown) {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
@@ -267,9 +259,8 @@ async function createOutboundDelivery(input: {
     throw new AppError('Failed to create WhatsApp integration event', 500)
   }
 
-  const { data, error } = await supabaseAdmin
-    .from('whatsapp_message_deliveries')
-    .insert({
+  const row = await prisma.whatsapp_message_deliveries.create({
+    data: {
       organization_id: input.organizationId ?? null,
       owner_id: input.ownerId ?? null,
       tenant_id: input.tenantId ?? null,
@@ -284,16 +275,14 @@ async function createOutboundDelivery(input: {
       recipient_e164: recipient.e164,
       rendered_body: input.renderedBody ?? null,
       fallback_text: input.fallbackText ?? null,
-      action_payload: input.actionPayload ?? {},
-      provider_payload: input.payload ?? {},
+      action_payload: (input.actionPayload ?? {}) as object,
+      provider_payload: (input.payload ?? {}) as object,
       status: 'queued',
       attempt_key: input.attemptKey ?? null,
-    })
-    .select(outboundSelect)
-    .single()
-
-  throwIfError(error, 'Failed to create WhatsApp delivery log')
-  return data as OutboundDeliveryRow
+    },
+    select: { id: true, integration_event_id: true },
+  })
+  return row as OutboundDeliveryRow
 }
 
 async function updateOutboundDelivery(input: {
@@ -310,21 +299,19 @@ async function updateOutboundDelivery(input: {
   const deliveredAt = input.status === 'delivered' ? nowIso : undefined
   const readAt = input.status === 'read' ? nowIso : undefined
 
-  const { error } = await supabaseAdmin
-    .from('whatsapp_message_deliveries')
-    .update({
+  await prisma.whatsapp_message_deliveries.update({
+    where: { id: input.deliveryId },
+    data: {
       status: input.status,
       provider_message_id: input.providerMessageId ?? undefined,
       provider_conversation_id: input.providerConversationId ?? undefined,
-      provider_payload: input.providerPayload ?? undefined,
+      provider_payload: input.providerPayload ? (input.providerPayload as object) : undefined,
       last_error: typeof input.lastError === 'undefined' ? undefined : input.lastError,
-      sent_at: sentAt,
-      delivered_at: deliveredAt,
-      read_at: readAt,
-    })
-    .eq('id', input.deliveryId)
-
-  throwIfError(error, 'Failed to update WhatsApp delivery log')
+      sent_at: sentAt ? new Date(sentAt) : undefined,
+      delivered_at: deliveredAt ? new Date(deliveredAt) : undefined,
+      read_at: readAt ? new Date(readAt) : undefined,
+    },
+  })
 
   if (input.integrationEventId) {
     await updateIntegrationEvent({
@@ -360,9 +347,9 @@ async function insertInboundEvent(input: {
 }) {
   const sender = input.sender ? normalizeRecipient(input.sender) : null
   const recipient = input.recipient ? normalizeRecipient(input.recipient) : null
-  const { data, error } = await supabaseAdmin
-    .from('whatsapp_inbound_events')
-    .insert({
+  const now = new Date()
+  const row = await prisma.whatsapp_inbound_events.create({
+    data: {
       organization_id: input.organizationId ?? null,
       delivery_id: input.deliveryId ?? null,
       integration_event_id: input.integrationEventId ?? null,
@@ -375,18 +362,16 @@ async function insertInboundEvent(input: {
       recipient_e164: recipient?.e164 ?? null,
       external_message_id: input.externalMessageId ?? null,
       provider_conversation_id: input.providerConversationId ?? null,
-      payload: input.payload,
-      normalized_payload: input.normalizedPayload ?? {},
+      payload: input.payload as object,
+      normalized_payload: (input.normalizedPayload ?? {}) as object,
       status: input.status ?? 'received',
       last_error: input.lastError ?? null,
-      received_at: new Date().toISOString(),
-      processed_at: input.status === 'processed' ? new Date().toISOString() : null,
-    })
-    .select(inboundSelect)
-    .single()
-
-  throwIfError(error, 'Failed to insert WhatsApp inbound event')
-  return data as InboundDeliveryLink
+      received_at: now,
+      processed_at: input.status === 'processed' ? now : null,
+    },
+    select: { id: true },
+  })
+  return row as InboundDeliveryLink
 }
 
 async function updateInboundEvent(input: {
@@ -395,28 +380,23 @@ async function updateInboundEvent(input: {
   status: InboundStatus
   lastError?: string | null
 }) {
-  const { error } = await supabaseAdmin
-    .from('whatsapp_inbound_events')
-    .update({
+  await prisma.whatsapp_inbound_events.update({
+    where: { id: input.inboundEventId },
+    data: {
       delivery_id: input.deliveryId ?? undefined,
       status: input.status,
       last_error: typeof input.lastError === 'undefined' ? undefined : input.lastError,
-      processed_at: input.status === 'processed' ? new Date().toISOString() : undefined,
-    })
-    .eq('id', input.inboundEventId)
-
-  throwIfError(error, 'Failed to update WhatsApp inbound event')
+      processed_at: input.status === 'processed' ? new Date() : undefined,
+    },
+  })
 }
 
 async function findDeliveryByProviderMessageId(providerMessageId: string) {
-  const { data, error } = await supabaseAdmin
-    .from('whatsapp_message_deliveries')
-    .select('id, integration_event_id')
-    .eq('provider_message_id', providerMessageId)
-    .maybeSingle()
-
-  throwIfError(error, 'Failed to locate WhatsApp delivery by provider message id')
-  return (data as OutboundDeliveryRow | null) ?? null
+  const row = await prisma.whatsapp_message_deliveries.findFirst({
+    select: { id: true, integration_event_id: true },
+    where: { provider_message_id: providerMessageId },
+  })
+  return (row as OutboundDeliveryRow | null) ?? null
 }
 
 function extractGenericWebhookEvent(body: Record<string, unknown>): WhatsAppInboundEvent[] {

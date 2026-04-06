@@ -3,7 +3,7 @@ import type { Request, Response } from 'express'
 
 import { env } from '../config/env.js'
 import { AppError, asyncHandler } from '../lib/errors.js'
-import { supabaseAdmin } from '../lib/supabase.js'
+import { prisma } from '../lib/db.js'
 import { notifyTenantTicketClosed, notifyTenantTicketReply, notifyTenantTicketStatusUpdated } from '../services/notificationService.js'
 import { createProperty, createTenant } from '../services/ownerService.js'
 import { reviewOwnerRentPaymentApproval } from '../services/rentPaymentService.js'
@@ -358,36 +358,24 @@ async function sendOwnerTicketList(input: {
   const pageSize = 5
   const safePage = Math.max(1, Math.min(input.page, 99))
   const from = (safePage - 1) * pageSize
-  const to = from + pageSize - 1
 
-  let listQuery = supabaseAdmin
-    .from('support_tickets')
-    .select('id, subject, status, created_at, tenants(full_name, tenant_access_id)')
-    .eq('organization_id', input.organizationId)
-    .eq('owner_id', input.ownerId)
-    .order('created_at', { ascending: false })
-    .range(from, to)
-  let countQuery = supabaseAdmin
-    .from('support_tickets')
-    .select('id', { count: 'exact', head: true })
-    .eq('organization_id', input.organizationId)
-    .eq('owner_id', input.ownerId)
+  const ticketWhere: Record<string, unknown> = { organization_id: input.organizationId, owner_id: input.ownerId }
+  if (input.filter !== 'all') ticketWhere.status = input.filter
 
-  if (input.filter !== 'all') {
-    listQuery = listQuery.eq('status', input.filter)
-    countQuery = countQuery.eq('status', input.filter)
-  }
+  const [ticketData, total] = await Promise.all([
+    prisma.support_tickets.findMany({
+      select: { id: true, subject: true, status: true, created_at: true, tenants: { select: { full_name: true, tenant_access_id: true } } },
+      where: ticketWhere,
+      orderBy: { created_at: 'desc' },
+      skip: from,
+      take: pageSize,
+    }),
+    prisma.support_tickets.count({ where: ticketWhere }),
+  ])
 
-  const [{ data, error }, { count, error: countError }] = await Promise.all([listQuery, countQuery])
-
-  if (error || countError) {
-    throw new AppError('Failed to load tickets', 500)
-  }
-
-  const total = count ?? 0
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
   const currentPage = Math.min(safePage, totalPages)
-  const rows = (data ?? []).map((row) => {
+  const rows = ticketData.map((row) => {
     const tenant = (row.tenants as { full_name?: string | null; tenant_access_id?: string | null } | null) ?? null
     const statusIcon = row.status === 'closed' ? '✅' : row.status === 'resolved' ? '🟢' : row.status === 'in_progress' ? '🟡' : '🟠'
     return `${statusIcon} #${String(row.id).slice(0, 8)} ${row.subject} (${tenant?.full_name ?? tenant?.tenant_access_id ?? 'Tenant'})`
@@ -419,20 +407,15 @@ async function sendOwnerTicketList(input: {
 }
 
 async function sendOwnerTenantsSnapshot(input: { chatId: string; organizationId: string; ownerId: string }) {
-  const { data, error } = await supabaseAdmin
-    .from('tenants')
-    .select('id, full_name, tenant_access_id, status, payment_status, lease_end_date, monthly_rent')
-    .eq('organization_id', input.organizationId)
-    .eq('owner_id', input.ownerId)
-    .order('created_at', { ascending: false })
-    .limit(8)
+  const tenants = await prisma.tenants.findMany({
+    select: { id: true, full_name: true, tenant_access_id: true, status: true, payment_status: true, lease_end_date: true, monthly_rent: true },
+    where: { organization_id: input.organizationId, owner_id: input.ownerId },
+    orderBy: { created_at: 'desc' },
+    take: 8,
+  })
 
-  if (error) {
-    throw new AppError('Failed to load tenants', 500)
-  }
-
-  const lines = (data ?? []).map((row) => {
-    const leaseEnd = row.lease_end_date ? String(row.lease_end_date).slice(0, 10) : '-'
+  const lines = tenants.map((row) => {
+    const leaseEnd = row.lease_end_date instanceof Date ? row.lease_end_date.toISOString().slice(0, 10) : '-'
     return `• ${row.full_name} (${row.tenant_access_id}) | ${row.status} | rent: ${row.payment_status} | lease: ${leaseEnd} | amount: ${row.monthly_rent}`
   })
 
@@ -449,17 +432,12 @@ async function sendOwnerTenantsSnapshot(input: { chatId: string; organizationId:
 }
 
 async function sendOwnerPropertySnapshot(input: { chatId: string; organizationId: string; ownerId: string }) {
-  const { data: properties, error } = await supabaseAdmin
-    .from('properties')
-    .select('id, property_name, unit_number')
-    .eq('organization_id', input.organizationId)
-    .eq('owner_id', input.ownerId)
-    .order('created_at', { ascending: false })
-    .limit(6)
-
-  if (error) {
-    throw new AppError('Failed to load properties', 500)
-  }
+  const properties = await prisma.properties.findMany({
+    select: { id: true, property_name: true, unit_number: true },
+    where: { organization_id: input.organizationId, owner_id: input.ownerId },
+    orderBy: { created_at: 'desc' },
+    take: 6,
+  })
 
   if (!properties || properties.length === 0) {
     await sendTelegramMessageWithRetry({
@@ -477,30 +455,21 @@ async function sendOwnerPropertySnapshot(input: { chatId: string; organizationId
 
   const lines: string[] = []
   for (const property of properties) {
-    const [{ data: tenantRows, count: tenantCount }] = await Promise.all([
-      supabaseAdmin
-        .from('tenants')
-        .select('id', { count: 'exact' })
-        .eq('organization_id', input.organizationId)
-        .eq('owner_id', input.ownerId)
-        .eq('property_id', property.id)
-        .eq('status', 'active'),
+    const tenantWhere = { organization_id: input.organizationId, owner_id: input.ownerId, property_id: property.id, status: 'active' }
+    const [tenantCount, tenantRows] = await Promise.all([
+      prisma.tenants.count({ where: tenantWhere }),
+      prisma.tenants.findMany({ select: { id: true }, where: tenantWhere }),
     ])
-    const tenantIds = (tenantRows ?? []).map((tenant) => tenant.id as string)
+    const tenantIds = tenantRows.map((t) => t.id)
     let openTicketCount = 0
     if (tenantIds.length > 0) {
-      const { count } = await supabaseAdmin
-        .from('support_tickets')
-        .select('id', { count: 'exact', head: true })
-        .eq('organization_id', input.organizationId)
-        .eq('owner_id', input.ownerId)
-        .in('status', ['open', 'in_progress'])
-        .in('tenant_id', tenantIds)
-      openTicketCount = count ?? 0
+      openTicketCount = await prisma.support_tickets.count({
+        where: { organization_id: input.organizationId, owner_id: input.ownerId, status: { in: ['open', 'in_progress'] }, tenant_id: { in: tenantIds } },
+      })
     }
 
     lines.push(
-      `• ${property.property_name}${property.unit_number ? ` (${property.unit_number})` : ''} | tenants: ${tenantCount ?? 0} | open tickets: ${openTicketCount ?? 0}`,
+      `• ${property.property_name}${property.unit_number ? ` (${property.unit_number})` : ''} | tenants: ${tenantCount} | open tickets: ${openTicketCount}`,
     )
   }
 
@@ -517,25 +486,20 @@ async function sendOwnerPropertySnapshot(input: { chatId: string; organizationId
 }
 
 async function sendOwnerPendingApprovalsSnapshot(input: { chatId: string; organizationId: string; ownerId: string }) {
-  const { data, error } = await supabaseAdmin
-    .from('rent_payment_approvals')
-    .select('id, due_date, amount_paid, tenants(full_name, tenant_access_id)')
-    .eq('organization_id', input.organizationId)
-    .eq('owner_id', input.ownerId)
-    .eq('status', 'awaiting_owner_approval')
-    .order('created_at', { ascending: false })
-    .limit(3)
-
-  if (error) {
-    throw new AppError('Failed to load pending approvals', 500)
-  }
-
-  const lines = (data ?? []).map((row) => {
-    const tenant = (row.tenants as { full_name?: string | null; tenant_access_id?: string | null } | null) ?? null
-    return `• ${tenant?.full_name ?? tenant?.tenant_access_id ?? 'Tenant'} | ${row.amount_paid} | due ${row.due_date} | ID: ${row.id}`
+  const data = await prisma.rent_payment_approvals.findMany({
+    select: { id: true, due_date: true, amount_paid: true, tenants: { select: { full_name: true, tenant_access_id: true } } },
+    where: { organization_id: input.organizationId, owner_id: input.ownerId, status: 'awaiting_owner_approval' },
+    orderBy: { created_at: 'desc' },
+    take: 3,
   })
 
-  const actionButtons = (data ?? []).flatMap((row) => [
+  const lines = data.map((row) => {
+    const tenant = (row.tenants as { full_name?: string | null; tenant_access_id?: string | null } | null) ?? null
+    const dueDate = row.due_date instanceof Date ? row.due_date.toISOString().slice(0, 10) : String(row.due_date)
+    return `• ${tenant?.full_name ?? tenant?.tenant_access_id ?? 'Tenant'} | ${Number(row.amount_paid ?? 0)} | due ${dueDate} | ID: ${row.id}`
+  })
+
+  const actionButtons = data.flatMap((row) => [
     [
       { text: `✅ #${String(row.id).slice(0, 6)}`, callback_data: `ra|approve|${row.id}` },
       { text: `❌ #${String(row.id).slice(0, 6)}`, callback_data: `ra|reject|${row.id}` },
@@ -570,58 +534,31 @@ async function sendOwnerPortfolioSnapshot(input: { chatId: string; organizationI
   const cycleYear = now.getUTCFullYear()
   const cycleMonth = now.getUTCMonth() + 1
 
-  const [propertiesResult, activeTenantsResult, openTicketsResult, overdueTenantsResult, approvedRentResult, pendingApprovalsResult] =
+  const orgWhere = { organization_id: input.organizationId, owner_id: input.ownerId }
+  const [propertiesCount, activeTenantsCount, openTicketsCount, overdueTenantsCount, approvedRentRows, pendingApprovalsCount] =
     await Promise.all([
-      supabaseAdmin
-        .from('properties')
-        .select('id', { count: 'exact', head: true })
-        .eq('organization_id', input.organizationId)
-        .eq('owner_id', input.ownerId),
-      supabaseAdmin
-        .from('tenants')
-        .select('id', { count: 'exact', head: true })
-        .eq('organization_id', input.organizationId)
-        .eq('owner_id', input.ownerId)
-        .eq('status', 'active'),
-      supabaseAdmin
-        .from('support_tickets')
-        .select('id', { count: 'exact', head: true })
-        .eq('organization_id', input.organizationId)
-        .eq('owner_id', input.ownerId)
-        .in('status', ['open', 'in_progress']),
-      supabaseAdmin
-        .from('tenants')
-        .select('id', { count: 'exact', head: true })
-        .eq('organization_id', input.organizationId)
-        .eq('owner_id', input.ownerId)
-        .eq('payment_status', 'overdue'),
-      supabaseAdmin
-        .from('rent_payment_approvals')
-        .select('amount_paid')
-        .eq('organization_id', input.organizationId)
-        .eq('owner_id', input.ownerId)
-        .eq('cycle_year', cycleYear)
-        .eq('cycle_month', cycleMonth)
-        .eq('status', 'approved'),
-      supabaseAdmin
-        .from('rent_payment_approvals')
-        .select('id', { count: 'exact', head: true })
-        .eq('organization_id', input.organizationId)
-        .eq('owner_id', input.ownerId)
-        .eq('status', 'awaiting_owner_approval'),
+      prisma.properties.count({ where: orgWhere }),
+      prisma.tenants.count({ where: { ...orgWhere, status: 'active' } }),
+      prisma.support_tickets.count({ where: { ...orgWhere, status: { in: ['open', 'in_progress'] } } }),
+      prisma.tenants.count({ where: { ...orgWhere, payment_status: 'overdue' } }),
+      prisma.rent_payment_approvals.findMany({
+        select: { amount_paid: true },
+        where: { ...orgWhere, cycle_year: cycleYear, cycle_month: cycleMonth, status: 'approved' },
+      }),
+      prisma.rent_payment_approvals.count({ where: { ...orgWhere, status: 'awaiting_owner_approval' } }),
     ])
 
-  const approvedAmount = (approvedRentResult.data ?? []).reduce((sum, row) => sum + Number(row.amount_paid ?? 0), 0)
+  const approvedAmount = approvedRentRows.reduce((sum: number, row) => sum + Number(row.amount_paid ?? 0), 0)
 
   await sendTelegramMessageWithRetry({
     chatId: input.chatId,
     text: [
       '📈 Portfolio Snapshot',
-      `🏠 Properties: ${propertiesResult.count ?? 0}`,
-      `👥 Active tenants: ${activeTenantsResult.count ?? 0}`,
-      `🎫 Open tickets: ${openTicketsResult.count ?? 0}`,
-      `⏰ Overdue rent tenants: ${overdueTenantsResult.count ?? 0}`,
-      `💸 Pending approvals: ${pendingApprovalsResult.count ?? 0}`,
+      `🏠 Properties: ${propertiesCount}`,
+      `👥 Active tenants: ${activeTenantsCount}`,
+      `🎫 Open tickets: ${openTicketsCount}`,
+      `⏰ Overdue rent tenants: ${overdueTenantsCount}`,
+      `💸 Pending approvals: ${pendingApprovalsCount}`,
       `💰 Approved rent this cycle: ${approvedAmount}`,
     ].join('\n'),
     logContext: {
@@ -817,15 +754,14 @@ async function finalizeAddProperty(chatId: string) {
 
 async function startAddTenantFlow(input: { chatId: string; organizationId: string; ownerId: string }) {
   // Check if owner has any properties first
-  const { data: properties, error } = await supabaseAdmin
-    .from('properties')
-    .select('id, property_name, unit_number')
-    .eq('organization_id', input.organizationId)
-    .eq('owner_id', input.ownerId)
-    .order('created_at', { ascending: false })
-    .limit(20)
+  const properties = await prisma.properties.findMany({
+    select: { id: true, property_name: true, unit_number: true },
+    where: { organization_id: input.organizationId, owner_id: input.ownerId },
+    orderBy: { created_at: 'desc' },
+    take: 20,
+  })
 
-  if (error || !properties || properties.length === 0) {
+  if (!properties || properties.length === 0) {
     await sendTelegramMessageWithRetry({
       chatId: input.chatId,
       text: '⚠️ You need at least one property before adding a tenant. Use /addproperty first.',
@@ -937,15 +873,14 @@ async function processAddTenantStep(input: { chatId: string; text: string }) {
     setConversation(input.chatId, conv)
 
     // Show property selection buttons
-    const { data: properties } = await supabaseAdmin
-      .from('properties')
-      .select('id, property_name, unit_number')
-      .eq('organization_id', organizationId)
-      .eq('owner_id', ownerId)
-      .order('created_at', { ascending: false })
-      .limit(20)
+    const properties = await prisma.properties.findMany({
+      select: { id: true, property_name: true, unit_number: true },
+      where: { organization_id: organizationId, owner_id: ownerId },
+      orderBy: { created_at: 'desc' },
+      take: 20,
+    })
 
-    const propertyButtons = (properties ?? []).map((p) => [
+    const propertyButtons = properties.map((p) => [
       {
         text: `${p.property_name}${p.unit_number ? ` (${p.unit_number})` : ''}`,
         callback_data: `atp|${p.id}|${p.property_name.slice(0, 30)}`,
@@ -1248,58 +1183,27 @@ async function processOwnerStatsCommand(payload: TelegramWebhookUpdate['message'
     telegramUserId: String(userId),
   })
 
-  const [activeTenantsResult, totalTicketsResult, openTicketsResult, closedTicketsResult, pendingApprovalsResult] = await Promise.all([
-    supabaseAdmin
-      .from('tenants')
-      .select('id', { count: 'exact', head: true })
-      .eq('organization_id', ownerLink.organization_id)
-      .eq('owner_id', ownerLink.owner_id)
-      .eq('status', 'active'),
-    supabaseAdmin
-      .from('support_tickets')
-      .select('id', { count: 'exact', head: true })
-      .eq('organization_id', ownerLink.organization_id)
-      .eq('owner_id', ownerLink.owner_id),
-    supabaseAdmin
-      .from('support_tickets')
-      .select('id', { count: 'exact', head: true })
-      .eq('organization_id', ownerLink.organization_id)
-      .eq('owner_id', ownerLink.owner_id)
-      .in('status', ['open', 'in_progress']),
-    supabaseAdmin
-      .from('support_tickets')
-      .select('id', { count: 'exact', head: true })
-      .eq('organization_id', ownerLink.organization_id)
-      .eq('owner_id', ownerLink.owner_id)
-      .eq('status', 'closed'),
-    supabaseAdmin
-      .from('rent_payment_approvals')
-      .select('id', { count: 'exact', head: true })
-      .eq('organization_id', ownerLink.organization_id)
-      .eq('owner_id', ownerLink.owner_id)
-      .eq('status', 'awaiting_owner_approval'),
-  ])
-
-  const errors = [
-    activeTenantsResult.error,
-    totalTicketsResult.error,
-    openTicketsResult.error,
-    closedTicketsResult.error,
-    pendingApprovalsResult.error,
-  ].filter(Boolean)
-  if (errors.length > 0) {
-    throw new AppError('Failed to load owner stats', 500)
+  if (!ownerLink.owner_id) {
+    throw new AppError('Owner identity incomplete', 500)
   }
+  const statsWhere = { organization_id: ownerLink.organization_id, owner_id: ownerLink.owner_id }
+  const [activeTenantsCount, totalTicketsCount, openTicketsCount, closedTicketsCount, pendingApprovalsCount] = await Promise.all([
+    prisma.tenants.count({ where: { ...statsWhere, status: 'active' } }),
+    prisma.support_tickets.count({ where: statsWhere }),
+    prisma.support_tickets.count({ where: { ...statsWhere, status: { in: ['open', 'in_progress'] } } }),
+    prisma.support_tickets.count({ where: { ...statsWhere, status: 'closed' } }),
+    prisma.rent_payment_approvals.count({ where: { ...statsWhere, status: 'awaiting_owner_approval' } }),
+  ])
 
   await sendTelegramMessageWithRetry({
     chatId: String(chatId),
     text: [
       '📊 Owner Quick Stats',
-      `👥 Active tenants: ${activeTenantsResult.count ?? 0}`,
-      `🎫 Total tickets: ${totalTicketsResult.count ?? 0}`,
-      `🟠 Open tickets: ${openTicketsResult.count ?? 0}`,
-      `✅ Closed tickets: ${closedTicketsResult.count ?? 0}`,
-      `💸 Pending rent approvals: ${pendingApprovalsResult.count ?? 0}`,
+      `👥 Active tenants: ${activeTenantsCount}`,
+      `🎫 Total tickets: ${totalTicketsCount}`,
+      `🟠 Open tickets: ${openTicketsCount}`,
+      `✅ Closed tickets: ${closedTicketsCount}`,
+      `💸 Pending rent approvals: ${pendingApprovalsCount}`,
       '',
       '⚡ Commands',
       '/ownerstats',

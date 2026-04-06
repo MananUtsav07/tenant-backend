@@ -1,7 +1,4 @@
-import type { PostgrestError } from '@supabase/supabase-js'
-
-import { AppError } from '../lib/errors.js'
-import { supabaseAdmin } from '../lib/supabase.js'
+import { prisma } from '../lib/db.js'
 
 export type OwnerAutomationSettings = {
   id: string
@@ -23,15 +20,8 @@ export type OwnerAutomationSettings = {
   updated_at: string
 }
 
-function throwIfError(error: PostgrestError | null, message: string): void {
-  if (error) {
-    throw new AppError(message, 500, error.message)
-  }
-}
-
 function defaultSettings(ownerId: string, organizationId: string): OwnerAutomationSettings {
   const now = new Date().toISOString()
-
   return {
     id: 'default',
     organization_id: organizationId,
@@ -54,20 +44,11 @@ function defaultSettings(ownerId: string, organizationId: string): OwnerAutomati
 }
 
 export async function getOwnerAutomationSettings(ownerId: string, organizationId: string): Promise<OwnerAutomationSettings> {
-  const { data, error } = await supabaseAdmin
-    .from('owner_automation_settings')
-    .select('*')
-    .eq('owner_id', ownerId)
-    .eq('organization_id', organizationId)
-    .maybeSingle()
-
-  throwIfError(error, 'Failed to load owner automation settings')
-
-  if (!data) {
-    return defaultSettings(ownerId, organizationId)
-  }
-
-  return data as OwnerAutomationSettings
+  const data = await prisma.owner_automation_settings.findFirst({
+    where: { owner_id: ownerId, organization_id: organizationId },
+  })
+  if (!data) return defaultSettings(ownerId, organizationId)
+  return data as unknown as OwnerAutomationSettings
 }
 
 export async function updateOwnerAutomationSettings(
@@ -91,23 +72,12 @@ export async function updateOwnerAutomationSettings(
     >
   >,
 ): Promise<OwnerAutomationSettings> {
-  const { data, error } = await supabaseAdmin
-    .from('owner_automation_settings')
-    .upsert(
-      {
-        owner_id: ownerId,
-        organization_id: organizationId,
-        ...patch,
-      },
-      {
-        onConflict: 'organization_id,owner_id',
-      },
-    )
-    .select('*')
-    .single()
-
-  throwIfError(error, 'Failed to update owner automation settings')
-  return data as OwnerAutomationSettings
+  const data = await prisma.owner_automation_settings.upsert({
+    where: { organization_id_owner_id: { organization_id: organizationId, owner_id: ownerId } },
+    create: { owner_id: ownerId, organization_id: organizationId, ...patch },
+    update: { ...patch },
+  })
+  return data as unknown as OwnerAutomationSettings
 }
 
 export async function listOwnerAutomationActivity(input: {
@@ -116,22 +86,18 @@ export async function listOwnerAutomationActivity(input: {
   page: number
   page_size: number
 }) {
-  const from = (input.page - 1) * input.page_size
-  const to = from + input.page_size - 1
+  const skip = (input.page - 1) * input.page_size
 
-  const { data, error, count } = await supabaseAdmin
-    .from('automation_runs')
-    .select('id, job_id, organization_id, owner_id, flow_name, status, started_at, completed_at, processed_count, metadata', {
-      count: 'exact',
-    })
-    .eq('organization_id', input.organizationId)
-    .order('started_at', { ascending: false })
-    .range(from, to)
+  const [items, total] = await prisma.$transaction([
+    prisma.automation_runs.findMany({
+      select: { id: true, job_id: true, organization_id: true, owner_id: true, flow_name: true, status: true, started_at: true, completed_at: true, processed_count: true, metadata: true },
+      where: { organization_id: input.organizationId },
+      orderBy: { started_at: 'desc' },
+      skip,
+      take: input.page_size,
+    }),
+    prisma.automation_runs.count({ where: { organization_id: input.organizationId } }),
+  ])
 
-  throwIfError(error, 'Failed to load automation activity')
-
-  return {
-    items: data ?? [],
-    total: count ?? 0,
-  }
+  return { items, total }
 }

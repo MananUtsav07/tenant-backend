@@ -1,14 +1,5 @@
-import type { PostgrestError } from '@supabase/supabase-js'
-
-import { AppError } from '../../../lib/errors.js'
-import { supabaseAdmin } from '../../../lib/supabase.js'
+import { prisma } from '../../../lib/db.js'
 import type { AutomationRunStatus } from './types.js'
-
-function throwIfError(error: PostgrestError | null, message: string) {
-  if (error) {
-    throw new AppError(message, 500, error.message)
-  }
-}
 
 export async function recordAutomationRun(input: {
   jobId: string
@@ -21,9 +12,8 @@ export async function recordAutomationRun(input: {
   processedCount: number
   metadata: Record<string, unknown>
 }) {
-  const { data, error } = await supabaseAdmin
-    .from('automation_runs')
-    .insert({
+  const data = await prisma.automation_runs.create({
+    data: {
       job_id: input.jobId,
       organization_id: input.organizationId,
       owner_id: input.ownerId,
@@ -32,13 +22,12 @@ export async function recordAutomationRun(input: {
       started_at: input.startedAt,
       completed_at: input.completedAt,
       processed_count: input.processedCount,
-      metadata: input.metadata,
-    })
-    .select('id')
-    .single()
+      metadata: input.metadata as object,
+    },
+    select: { id: true },
+  })
 
-  throwIfError(error, 'Failed to insert automation run record')
-  return { id: data?.id as string }
+  return { id: data.id as string }
 }
 
 export async function recordAutomationError(input: {
@@ -49,14 +38,14 @@ export async function recordAutomationError(input: {
   errorMessage: string
   context: Record<string, unknown>
 }) {
-  const { error } = await supabaseAdmin.from('automation_errors').insert({
-    job_id: input.jobId,
-    organization_id: input.organizationId,
-    owner_id: input.ownerId,
-    flow_name: input.flowName,
-    error_message: input.errorMessage,
-    context: input.context,
+  await prisma.automation_errors.create({
+    data: {
+      job_id: input.jobId,
+      organization_id: input.organizationId,
+      owner_id: input.ownerId,
+      flow_name: input.flowName,
+      error_message: input.errorMessage,
+      context: input.context as object,
+    },
   })
-
-  throwIfError(error, 'Failed to insert automation error record')
 }

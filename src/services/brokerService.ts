@@ -1,7 +1,4 @@
-import type { PostgrestError } from '@supabase/supabase-js'
-
-import { AppError } from '../lib/errors.js'
-import { supabaseAdmin } from '../lib/supabase.js'
+import { prisma } from '../lib/db.js'
 
 type BrokerRow = {
   id: string
@@ -17,21 +14,13 @@ type BrokerRow = {
   updated_at: string
 }
 
-function throwIfError(error: PostgrestError | null, message: string): void {
-  if (error) {
-    throw new AppError(message, 500, error.message)
-  }
-}
-
 export async function listBrokers(organizationId: string) {
-  const { data, error } = await supabaseAdmin
-    .from('brokers')
-    .select('*')
-    .eq('organization_id', organizationId)
-    .order('created_at', { ascending: false })
+  const data = await prisma.brokers.findMany({
+    where: { organization_id: organizationId },
+    orderBy: { created_at: 'desc' },
+  })
 
-  throwIfError(error, 'Failed to load brokers')
-  return (data ?? []) as BrokerRow[]
+  return data as unknown as BrokerRow[]
 }
 
 export async function createBroker(input: {
@@ -44,9 +33,8 @@ export async function createBroker(input: {
   notes?: string | null
   is_active?: boolean
 }) {
-  const { data, error } = await supabaseAdmin
-    .from('brokers')
-    .insert({
+  const data = await prisma.brokers.create({
+    data: {
       organization_id: input.organizationId,
       owner_id: input.ownerId,
       full_name: input.full_name,
@@ -55,12 +43,10 @@ export async function createBroker(input: {
       agency_name: input.agency_name ?? null,
       notes: input.notes ?? null,
       is_active: input.is_active ?? true,
-    })
-    .select('*')
-    .single()
+    },
+  })
 
-  throwIfError(error, 'Failed to create broker')
-  return data as BrokerRow
+  return data as unknown as BrokerRow
 }
 
 export async function updateBroker(input: {
@@ -75,37 +61,36 @@ export async function updateBroker(input: {
     is_active: boolean
   }>
 }) {
-  const { data, error } = await supabaseAdmin
-    .from('brokers')
-    .update(input.patch)
-    .eq('id', input.brokerId)
-    .eq('organization_id', input.organizationId)
-    .select('*')
-    .maybeSingle()
+  const data = await prisma.brokers.findFirst({
+    where: { id: input.brokerId, organization_id: input.organizationId },
+  })
 
-  throwIfError(error, 'Failed to update broker')
-  return (data as BrokerRow | null) ?? null
+  if (!data) return null
+
+  const updated = await prisma.brokers.update({
+    where: { id: input.brokerId },
+    data: input.patch,
+  })
+
+  return (updated as unknown as BrokerRow | null) ?? null
 }
 
 export async function deleteBroker(input: { organizationId: string; brokerId: string }) {
-  const { count, error } = await supabaseAdmin
-    .from('brokers')
-    .delete({ count: 'exact' })
-    .eq('id', input.brokerId)
-    .eq('organization_id', input.organizationId)
+  const existing = await prisma.brokers.findFirst({
+    where: { id: input.brokerId, organization_id: input.organizationId },
+    select: { id: true },
+  })
 
-  throwIfError(error, 'Failed to delete broker')
-  return count ?? 0
+  if (!existing) return 0
+
+  await prisma.brokers.delete({ where: { id: input.brokerId } })
+  return 1
 }
 
 export async function getBrokerById(input: { organizationId: string; brokerId: string }) {
-  const { data, error } = await supabaseAdmin
-    .from('brokers')
-    .select('*')
-    .eq('id', input.brokerId)
-    .eq('organization_id', input.organizationId)
-    .maybeSingle()
+  const data = await prisma.brokers.findFirst({
+    where: { id: input.brokerId, organization_id: input.organizationId },
+  })
 
-  throwIfError(error, 'Failed to load broker')
   return (data as BrokerRow | null) ?? null
 }

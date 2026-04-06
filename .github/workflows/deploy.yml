@@ -31,7 +31,7 @@ jobs:
           host: ${{ secrets.LIGHTSAIL_HOST }}
           username: ubuntu
           key: ${{ secrets.LIGHTSAIL_SSH_KEY }}
-          source: 'dist/*,package.json,package-lock.json'
+          source: 'dist/*,package.json,package-lock.json,prisma/schema.prisma,prisma.config.ts'
           target: '/opt/prophives-backend'
           strip_components: 0
 

@@ -1,4 +1,3 @@
-import type { PostgrestError } from '@supabase/supabase-js'
 import bcrypt from 'bcryptjs'
 import { createHash, randomBytes } from 'node:crypto'
 
@@ -8,27 +7,11 @@ import {
   sendOwnerPasswordResetEmail,
   sendTenantPasswordResetEmail,
 } from '../lib/mailer.js'
-import { supabaseAdmin } from '../lib/supabase.js'
+import { prisma } from '../lib/db.js'
 import { findOwnerByEmail } from './ownerService.js'
 import { findTenantByAccessId } from './tenantService.js'
 
 type ResetRole = 'owner' | 'tenant'
-
-type PasswordResetTokenRow = {
-  id: string
-  organization_id: string
-  owner_id: string | null
-  tenant_id: string | null
-  user_role: ResetRole
-  expires_at: string
-  consumed_at: string | null
-}
-
-function throwIfError(error: PostgrestError | null, message: string): void {
-  if (error) {
-    throw new AppError(message, 500, error.message)
-  }
-}
 
 function hashPasswordResetToken(token: string): string {
   return createHash('sha256').update(token).digest('hex')
@@ -54,20 +37,15 @@ async function invalidatePasswordResetTokens(input: {
   ownerId?: string
   tenantId?: string
 }) {
-  let request = supabaseAdmin
-    .from('password_reset_tokens')
-    .update({ consumed_at: new Date().toISOString() })
-    .eq('user_role', input.role)
-    .is('consumed_at', null)
+  const where =
+    input.role === 'owner'
+      ? { user_role: input.role, consumed_at: null, owner_id: input.ownerId ?? '' }
+      : { user_role: input.role, consumed_at: null, tenant_id: input.tenantId ?? '' }
 
-  if (input.role === 'owner') {
-    request = request.eq('owner_id', input.ownerId ?? '')
-  } else {
-    request = request.eq('tenant_id', input.tenantId ?? '')
-  }
-
-  const { error } = await request
-  throwIfError(error, 'Failed to invalidate password reset tokens')
+  await prisma.password_reset_tokens.updateMany({
+    where,
+    data: { consumed_at: new Date() },
+  })
 }
 
 async function storePasswordResetToken(input: {
@@ -79,36 +57,29 @@ async function storePasswordResetToken(input: {
   tenantAccessId?: string | null
 }) {
   const token = createRawPasswordResetToken()
-  const expiresAt = new Date(Date.now() + env.PASSWORD_RESET_TOKEN_TTL_MINUTES * 60 * 1000).toISOString()
+  const expiresAt = new Date(Date.now() + env.PASSWORD_RESET_TOKEN_TTL_MINUTES * 60 * 1000)
 
-  const { error } = await supabaseAdmin.from('password_reset_tokens').insert({
-    organization_id: input.organizationId,
-    owner_id: input.role === 'owner' ? input.ownerId ?? null : null,
-    tenant_id: input.role === 'tenant' ? input.tenantId ?? null : null,
-    user_role: input.role,
-    email: input.email ?? null,
-    tenant_access_id: input.tenantAccessId ?? null,
-    token_hash: hashPasswordResetToken(token),
-    expires_at: expiresAt,
+  await prisma.password_reset_tokens.create({
+    data: {
+      organization_id: input.organizationId,
+      owner_id: input.role === 'owner' ? input.ownerId ?? null : null,
+      tenant_id: input.role === 'tenant' ? input.tenantId ?? null : null,
+      user_role: input.role,
+      email: input.email ?? null,
+      tenant_access_id: input.tenantAccessId ?? null,
+      token_hash: hashPasswordResetToken(token),
+      expires_at: expiresAt,
+    },
   })
 
-  throwIfError(error, 'Failed to create password reset token')
-
-  return {
-    token,
-    expiresAt,
-  }
+  return { token, expiresAt }
 }
 
-async function loadPasswordResetToken(token: string, role: ResetRole): Promise<PasswordResetTokenRow> {
-  const { data, error } = await supabaseAdmin
-    .from('password_reset_tokens')
-    .select('id, organization_id, owner_id, tenant_id, user_role, expires_at, consumed_at')
-    .eq('token_hash', hashPasswordResetToken(token))
-    .eq('user_role', role)
-    .maybeSingle()
-
-  throwIfError(error, 'Failed to validate password reset token')
+async function loadPasswordResetToken(token: string, role: ResetRole) {
+  const data = await prisma.password_reset_tokens.findFirst({
+    select: { id: true, organization_id: true, owner_id: true, tenant_id: true, user_role: true, expires_at: true, consumed_at: true },
+    where: { token_hash: hashPasswordResetToken(token), user_role: role },
+  })
 
   if (!data) {
     throw new AppError('Invalid password reset link', 400)
@@ -118,11 +89,11 @@ async function loadPasswordResetToken(token: string, role: ResetRole): Promise<P
     throw new AppError('This password reset link has already been used', 400)
   }
 
-  if (new Date(data.expires_at).getTime() < Date.now()) {
+  if (data.expires_at.getTime() < Date.now()) {
     throw new AppError('This password reset link has expired', 400)
   }
 
-  return data as PasswordResetTokenRow
+  return data
 }
 
 function normalizeOwnerName(owner: {
@@ -142,14 +113,9 @@ function normalizeTenantName(tenant: {
 
 export async function requestOwnerPasswordReset(email: string) {
   const owner = await findOwnerByEmail(email)
-  if (!owner?.email) {
-    return
-  }
+  if (!owner?.email) return
 
-  await invalidatePasswordResetTokens({
-    role: 'owner',
-    ownerId: owner.id,
-  })
+  await invalidatePasswordResetTokens({ role: 'owner', ownerId: owner.id })
 
   const { token } = await storePasswordResetToken({
     role: 'owner',
@@ -180,13 +146,10 @@ export async function requestTenantPasswordReset(input: {
   email: string
 }) {
   const tenant = await findTenantByAccessId(input.tenantAccessId)
-  if (!tenant) {
-    return
-  }
+  if (!tenant) return
 
   const tenantEmail = tenant.email?.trim().toLowerCase()
   if (!tenantEmail) {
-    // Tenant password reset links are email-delivered; keep this generic to avoid account enumeration.
     console.warn('[requestTenantPasswordReset] tenant has no email on file', {
       tenantId: tenant.id,
       tenantAccessId: tenant.tenant_access_id,
@@ -194,14 +157,9 @@ export async function requestTenantPasswordReset(input: {
     return
   }
 
-  if (tenantEmail !== input.email.trim().toLowerCase()) {
-    return
-  }
+  if (tenantEmail !== input.email.trim().toLowerCase()) return
 
-  await invalidatePasswordResetTokens({
-    role: 'tenant',
-    tenantId: tenant.id,
-  })
+  await invalidatePasswordResetTokens({ role: 'tenant', tenantId: tenant.id })
 
   const { token } = await storePasswordResetToken({
     role: 'tenant',
@@ -239,69 +197,43 @@ async function consumePasswordResetAndUpdatePassword(input: {
   const passwordHash = await bcrypt.hash(input.nextPassword, 10)
 
   if (input.role === 'owner') {
-    if (!tokenRow.owner_id) {
-      throw new AppError('Password reset token is missing an owner account', 500)
-    }
+    if (!tokenRow.owner_id) throw new AppError('Password reset token is missing an owner account', 500)
 
-    const { data, error } = await supabaseAdmin
-      .from('owners')
-      .update({
-        password_hash: passwordHash,
-      })
-      .eq('id', tokenRow.owner_id)
-      .eq('organization_id', tokenRow.organization_id)
-      .select('id')
-      .maybeSingle()
-
-    throwIfError(error, 'Failed to update owner password')
-    if (!data) {
-      throw new AppError('Owner account not found', 404)
-    }
-
-    await invalidatePasswordResetTokens({
-      role: 'owner',
-      ownerId: tokenRow.owner_id,
+    const owner = await prisma.owners.findFirst({
+      select: { id: true },
+      where: { id: tokenRow.owner_id, organization_id: tokenRow.organization_id },
     })
+    if (!owner) throw new AppError('Owner account not found', 404)
+
+    await prisma.owners.update({
+      where: { id: tokenRow.owner_id },
+      data: { password_hash: passwordHash },
+    })
+
+    await invalidatePasswordResetTokens({ role: 'owner', ownerId: tokenRow.owner_id })
     return
   }
 
-  if (!tokenRow.tenant_id) {
-    throw new AppError('Password reset token is missing a tenant account', 500)
-  }
+  if (!tokenRow.tenant_id) throw new AppError('Password reset token is missing a tenant account', 500)
 
-  const { data, error } = await supabaseAdmin
-    .from('tenants')
-    .update({
-      password_hash: passwordHash,
-    })
-    .eq('id', tokenRow.tenant_id)
-    .eq('organization_id', tokenRow.organization_id)
-    .select('id')
-    .maybeSingle()
-
-  throwIfError(error, 'Failed to update tenant password')
-  if (!data) {
-    throw new AppError('Tenant account not found', 404)
-  }
-
-  await invalidatePasswordResetTokens({
-    role: 'tenant',
-    tenantId: tokenRow.tenant_id,
+  const tenant = await prisma.tenants.findFirst({
+    select: { id: true },
+    where: { id: tokenRow.tenant_id, organization_id: tokenRow.organization_id },
   })
+  if (!tenant) throw new AppError('Tenant account not found', 404)
+
+  await prisma.tenants.update({
+    where: { id: tokenRow.tenant_id },
+    data: { password_hash: passwordHash },
+  })
+
+  await invalidatePasswordResetTokens({ role: 'tenant', tenantId: tokenRow.tenant_id })
 }
 
 export async function resetOwnerPassword(input: { token: string; password: string }) {
-  await consumePasswordResetAndUpdatePassword({
-    role: 'owner',
-    token: input.token,
-    nextPassword: input.password,
-  })
+  await consumePasswordResetAndUpdatePassword({ role: 'owner', token: input.token, nextPassword: input.password })
 }
 
 export async function resetTenantPassword(input: { token: string; password: string }) {
-  await consumePasswordResetAndUpdatePassword({
-    role: 'tenant',
-    token: input.token,
-    nextPassword: input.password,
-  })
+  await consumePasswordResetAndUpdatePassword({ role: 'tenant', token: input.token, nextPassword: input.password })
 }

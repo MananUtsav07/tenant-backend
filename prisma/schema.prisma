@@ -1,0 +1,1719 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["partialIndexes"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model admin_users {
+  id                       String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email                    String                     @unique
+  password_hash            String
+  full_name                String?
+  created_at               DateTime                   @default(now()) @db.Timestamptz(6)
+  updated_at               DateTime                   @default(now()) @db.Timestamptz(6)
+  condition_report_events  condition_report_events[]
+  maintenance_cost_entries maintenance_cost_entries[]
+  screening_events         screening_events[]
+  support_ticket_messages  support_ticket_messages[]
+
+  @@index([email])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model analytics_events {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  event_name String
+  user_type  String   @default("public")
+  metadata   Json     @default("{}")
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([event_name, created_at(sort: Desc)], map: "analytics_events_name_created_idx")
+  @@index([user_type, created_at(sort: Desc)], map: "analytics_events_user_type_created_idx")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model audit_logs {
+  id              String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id String?        @db.Uuid
+  actor_id        String
+  actor_role      String
+  action          String
+  entity_type     String
+  entity_id       String?
+  metadata        Json           @default("{}")
+  created_at      DateTime       @default(now()) @db.Timestamptz(6)
+  organizations   organizations? @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+
+  @@index([action, created_at(sort: Desc)], map: "audit_logs_action_idx")
+  @@index([actor_id, actor_role, created_at(sort: Desc)], map: "audit_logs_actor_idx")
+  @@index([organization_id, created_at(sort: Desc)], map: "audit_logs_org_created_idx")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model automation_errors {
+  id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  run_id          String?          @db.Uuid
+  job_id          String?          @db.Uuid
+  organization_id String?          @db.Uuid
+  owner_id        String?          @db.Uuid
+  flow_name       String
+  error_message   String
+  context         Json             @default("{}")
+  created_at      DateTime         @default(now()) @db.Timestamptz(6)
+  automation_jobs automation_jobs? @relation(fields: [job_id], references: [id], onUpdate: NoAction)
+  organizations   organizations?   @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  owners          owners?          @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  automation_runs automation_runs? @relation(fields: [run_id], references: [id], onUpdate: NoAction)
+
+  @@index([flow_name, created_at(sort: Desc)], map: "automation_errors_flow_created_idx")
+  @@index([organization_id, owner_id, created_at(sort: Desc)], map: "automation_errors_org_owner_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model automation_jobs {
+  id                             String                           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                String?                          @db.Uuid
+  owner_id                       String?                          @db.Uuid
+  job_type                       String
+  dedupe_key                     String                           @unique(map: "automation_jobs_dedupe_key_unique")
+  payload                        Json                             @default("{}")
+  run_at                         DateTime                         @default(now()) @db.Timestamptz(6)
+  status                         String                           @default("pending")
+  attempts                       Int                              @default(0)
+  max_attempts                   Int                              @default(3)
+  last_error                     String?
+  locked_at                      DateTime?                        @db.Timestamptz(6)
+  processed_at                   DateTime?                        @db.Timestamptz(6)
+  created_at                     DateTime                         @default(now()) @db.Timestamptz(6)
+  updated_at                     DateTime                         @default(now()) @db.Timestamptz(6)
+  handler_key                    String
+  trigger_type                   String                           @default("schedule")
+  lifecycle_status               String                           @default("queued")
+  source_type                    String?
+  source_ref                     String?
+  next_run_at                    DateTime                         @db.Timestamptz(6)
+  started_at                     DateTime?                        @db.Timestamptz(6)
+  finished_at                    DateTime?                        @db.Timestamptz(6)
+  retry_count                    Int                              @default(0)
+  last_error_code                String?
+  automation_errors              automation_errors[]
+  organizations                  organizations?                   @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  owners                         owners?                          @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  automation_runs                automation_runs[]
+  cash_flow_report_snapshots     cash_flow_report_snapshots[]
+  compliance_alert_events        compliance_alert_events[]
+  portfolio_visibility_snapshots portfolio_visibility_snapshots[]
+  whatsapp_message_deliveries    whatsapp_message_deliveries[]
+
+  @@index([handler_key, created_at(sort: Desc)], map: "automation_jobs_handler_key_idx")
+  @@index([lifecycle_status, next_run_at], map: "automation_jobs_lifecycle_next_run_idx")
+  @@index([organization_id, owner_id, created_at(sort: Desc)], map: "automation_jobs_org_owner_idx")
+  @@index([source_type, source_ref, created_at(sort: Desc)], map: "automation_jobs_source_ref_idx", where: raw("(source_ref IS NOT NULL)"))
+  @@index([status, run_at])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model automation_rules {
+  id                  String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id     String        @db.Uuid
+  owner_id            String?       @db.Uuid
+  rule_key            String
+  trigger_type        String        @default("schedule")
+  enabled             Boolean       @default(true)
+  schedule_expression String?
+  channel_preferences Json          @default("[\"email\"]")
+  metadata            Json          @default("{}")
+  created_at          DateTime      @default(now()) @db.Timestamptz(6)
+  updated_at          DateTime      @default(now()) @db.Timestamptz(6)
+  organizations       organizations @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  owners              owners?       @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([organization_id, owner_id, rule_key], map: "automation_rules_unique_key")
+  @@index([organization_id, owner_id, enabled], map: "automation_rules_org_owner_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model automation_runs {
+  id                             String                           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  job_id                         String?                          @db.Uuid
+  organization_id                String?                          @db.Uuid
+  owner_id                       String?                          @db.Uuid
+  flow_name                      String
+  status                         String
+  started_at                     DateTime                         @default(now()) @db.Timestamptz(6)
+  completed_at                   DateTime?                        @db.Timestamptz(6)
+  processed_count                Int                              @default(0)
+  metadata                       Json                             @default("{}")
+  created_at                     DateTime                         @default(now()) @db.Timestamptz(6)
+  updated_at                     DateTime                         @default(now()) @db.Timestamptz(6)
+  automation_errors              automation_errors[]
+  automation_jobs                automation_jobs?                 @relation(fields: [job_id], references: [id], onUpdate: NoAction)
+  organizations                  organizations?                   @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  owners                         owners?                          @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  cash_flow_report_snapshots     cash_flow_report_snapshots[]
+  compliance_alert_events        compliance_alert_events[]
+  portfolio_visibility_snapshots portfolio_visibility_snapshots[]
+  whatsapp_message_deliveries    whatsapp_message_deliveries[]
+
+  @@index([flow_name, started_at(sort: Desc)], map: "automation_runs_flow_started_idx")
+  @@index([organization_id, owner_id, started_at(sort: Desc)], map: "automation_runs_org_owner_idx")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model blog_posts {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  title       String
+  slug        String   @unique
+  content     String
+  excerpt     String
+  cover_image String?
+  author      String   @default("TenantFlow Team")
+  published   Boolean  @default(false)
+  created_at  DateTime @default(now()) @db.Timestamptz(6)
+  updated_at  DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([published, created_at(sort: Desc)], map: "blog_posts_published_created_idx")
+  @@index([slug])
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model brokers {
+  id                    String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id       String                  @db.Uuid
+  owner_id              String?                 @db.Uuid
+  full_name             String
+  email                 String
+  phone                 String?
+  agency_name           String?
+  notes                 String?
+  is_active             Boolean                 @default(true)
+  created_at            DateTime                @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime                @default(now()) @db.Timestamptz(6)
+  organizations         organizations           @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  owners                owners?                 @relation(fields: [owner_id], references: [id], onUpdate: NoAction)
+  lease_renewal_intents lease_renewal_intents[]
+  tenants               tenants[]
+
+  @@index([organization_id, is_active, created_at(sort: Desc)], map: "brokers_org_active_idx")
+  @@index([organization_id, email], map: "brokers_org_email_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model cash_flow_report_snapshots {
+  id                      String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id         String           @db.Uuid
+  owner_id                String           @db.Uuid
+  automation_job_id       String?          @db.Uuid
+  automation_run_id       String?          @db.Uuid
+  report_scope            String
+  trigger_type            String
+  report_year             Int
+  report_month            Int
+  report_period_key       String
+  report_label            String
+  period_start            DateTime         @db.Date
+  period_end              DateTime         @db.Date
+  currency_code           String           @default("INR")
+  property_count          Int              @default(0)
+  portfolio_gross_rent    Decimal          @default(0) @db.Decimal(12, 2)
+  portfolio_maintenance   Decimal          @default(0) @db.Decimal(12, 2)
+  portfolio_fixed_charges Decimal          @default(0) @db.Decimal(12, 2)
+  portfolio_net_income    Decimal          @default(0) @db.Decimal(12, 2)
+  portfolio_yield_percent Decimal?         @db.Decimal(7, 2)
+  below_target_count      Int              @default(0)
+  alerts_sent             Json             @default("[]")
+  payload                 Json             @default("{}")
+  created_at              DateTime         @default(now()) @db.Timestamptz(6)
+  automation_jobs         automation_jobs? @relation(fields: [automation_job_id], references: [id], onUpdate: NoAction)
+  automation_runs         automation_runs? @relation(fields: [automation_run_id], references: [id], onUpdate: NoAction)
+  organizations           organizations    @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  owners                  owners           @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([organization_id, report_scope, report_period_key, created_at(sort: Desc)], map: "cash_flow_report_snapshots_org_scope_period_idx")
+  @@index([owner_id, report_scope, created_at(sort: Desc)], map: "cash_flow_report_snapshots_owner_scope_created_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model compliance_alert_events {
+  id                       String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  legal_date_id            String           @db.Uuid
+  organization_id          String           @db.Uuid
+  owner_id                 String           @db.Uuid
+  property_id              String           @db.Uuid
+  tenant_id                String?          @db.Uuid
+  automation_job_id        String?          @db.Uuid
+  automation_run_id        String?          @db.Uuid
+  trigger_date_type        String
+  threshold_days           Int
+  relevant_date            DateTime         @db.Date
+  days_remaining           Int
+  notification_type        String           @default("compliance_alert")
+  message_subject          String?
+  message_preview          String?
+  delivery_channels        Json             @default("[]")
+  next_action              String?
+  legal_action_recommended Boolean          @default(false)
+  legal_action_initiated   Boolean          @default(false)
+  draft_title              String?
+  draft_body               String?
+  draft_payload            Json             @default("{}")
+  sent_at                  DateTime         @default(now()) @db.Timestamptz(6)
+  created_at               DateTime         @default(now()) @db.Timestamptz(6)
+  automation_jobs          automation_jobs? @relation(fields: [automation_job_id], references: [id], onUpdate: NoAction)
+  automation_runs          automation_runs? @relation(fields: [automation_run_id], references: [id], onUpdate: NoAction)
+  legal_dates              legal_dates      @relation(fields: [legal_date_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  organizations            organizations    @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  owners                   owners           @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  properties               properties       @relation(fields: [property_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenants                  tenants?         @relation(fields: [tenant_id], references: [id], onUpdate: NoAction)
+
+  @@unique([legal_date_id, trigger_date_type, threshold_days], map: "compliance_alert_events_unique_threshold")
+  @@index([automation_job_id, automation_run_id], map: "compliance_alert_events_job_idx")
+  @@index([organization_id, sent_at(sort: Desc)], map: "compliance_alert_events_org_sent_idx")
+  @@index([owner_id, sent_at(sort: Desc)], map: "compliance_alert_events_owner_sent_idx")
+  @@index([organization_id, legal_action_recommended, sent_at(sort: Desc)], map: "compliance_alert_events_recommended_idx", where: raw("(legal_action_recommended = true)"))
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model condition_report_events {
+  id                  String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  condition_report_id String            @db.Uuid
+  organization_id     String            @db.Uuid
+  actor_role          String
+  actor_owner_id      String?           @db.Uuid
+  actor_tenant_id     String?           @db.Uuid
+  actor_admin_id      String?           @db.Uuid
+  event_type          String
+  title               String
+  message             String
+  metadata            Json              @default("{}")
+  created_at          DateTime          @default(now()) @db.Timestamptz(6)
+  admin_users         admin_users?      @relation(fields: [actor_admin_id], references: [id], onUpdate: NoAction)
+  owners              owners?           @relation(fields: [actor_owner_id], references: [id], onUpdate: NoAction)
+  tenants             tenants?          @relation(fields: [actor_tenant_id], references: [id], onUpdate: NoAction)
+  condition_reports   condition_reports @relation(fields: [condition_report_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  organizations       organizations     @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([condition_report_id, created_at(sort: Desc)], map: "condition_report_events_report_created_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model condition_report_media {
+  id                            String                         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  condition_report_id           String                         @db.Uuid
+  room_entry_id                 String?                        @db.Uuid
+  organization_id               String                         @db.Uuid
+  room_label                    String
+  media_kind                    String                         @default("photo")
+  media_url                     String?
+  storage_path                  String?
+  mime_type                     String?
+  caption                       String?
+  captured_by_role              String
+  ai_analysis_status            String                         @default("not_requested")
+  ai_analysis_payload           Json                           @default("{}")
+  created_at                    DateTime                       @default(now()) @db.Timestamptz(6)
+  updated_at                    DateTime                       @default(now()) @db.Timestamptz(6)
+  condition_reports             condition_reports              @relation(fields: [condition_report_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  organizations                 organizations                  @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  condition_report_room_entries condition_report_room_entries? @relation(fields: [room_entry_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([condition_report_id, created_at(sort: Desc)], map: "condition_report_media_report_created_idx")
+  @@index([room_entry_id, created_at(sort: Desc)], map: "condition_report_media_room_idx", where: raw("(room_entry_id IS NOT NULL)"))
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model condition_report_room_entries {
+  id                     String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  condition_report_id    String                   @db.Uuid
+  organization_id        String                   @db.Uuid
+  room_label             String
+  display_order          Int                      @default(0)
+  condition_rating       String                   @default("not_reviewed")
+  condition_notes        String?
+  comparison_result      String                   @default("not_applicable")
+  comparison_notes       String?
+  created_at             DateTime                 @default(now()) @db.Timestamptz(6)
+  updated_at             DateTime                 @default(now()) @db.Timestamptz(6)
+  condition_report_media condition_report_media[]
+  condition_reports      condition_reports        @relation(fields: [condition_report_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  organizations          organizations            @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([condition_report_id, room_label], map: "condition_report_room_entries_unique_room")
+  @@index([condition_report_id, display_order, created_at], map: "condition_report_room_entries_report_order_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model condition_reports {
+  id                            String                          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id               String                          @db.Uuid
+  owner_id                      String                          @db.Uuid
+  property_id                   String                          @db.Uuid
+  tenant_id                     String?                         @db.Uuid
+  vacancy_campaign_id           String?                         @db.Uuid
+  baseline_report_id            String?                         @db.Uuid
+  report_type                   String
+  workflow_status               String                          @default("draft")
+  trigger_source                String
+  trigger_reference             String?
+  report_label                  String
+  report_summary                String?
+  comparison_status             String                          @default("not_applicable")
+  comparison_summary            String?
+  ai_analysis_status            String                          @default("not_requested")
+  ai_analysis_payload           Json                            @default("{}")
+  generated_document_status     String                          @default("not_generated")
+  generated_document_format     String?
+  generated_document_provider   String?
+  generated_document_url        String?
+  generated_document_payload    Json                            @default("{}")
+  owner_confirmation_status     String                          @default("pending")
+  owner_confirmation_note       String?
+  owner_confirmed_at            DateTime?                       @db.Timestamptz(6)
+  tenant_confirmation_status    String                          @default("pending")
+  tenant_confirmation_note      String?
+  tenant_confirmed_at           DateTime?                       @db.Timestamptz(6)
+  last_summary_refreshed_at     DateTime?                       @db.Timestamptz(6)
+  created_at                    DateTime                        @default(now()) @db.Timestamptz(6)
+  updated_at                    DateTime                        @default(now()) @db.Timestamptz(6)
+  condition_report_events       condition_report_events[]
+  condition_report_media        condition_report_media[]
+  condition_report_room_entries condition_report_room_entries[]
+  condition_reports             condition_reports?              @relation("condition_reportsTocondition_reports", fields: [baseline_report_id], references: [id], onUpdate: NoAction)
+  other_condition_reports       condition_reports[]             @relation("condition_reportsTocondition_reports")
+  organizations                 organizations                   @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  owners                        owners                          @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  properties                    properties                      @relation(fields: [property_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenants                       tenants?                        @relation(fields: [tenant_id], references: [id], onUpdate: NoAction)
+  vacancy_campaigns             vacancy_campaigns?              @relation(fields: [vacancy_campaign_id], references: [id], onUpdate: NoAction)
+
+  @@index([owner_id, created_at(sort: Desc)], map: "condition_reports_owner_created_idx")
+  @@index([property_id, report_type, created_at(sort: Desc)], map: "condition_reports_property_type_idx")
+  @@index([tenant_id, report_type, created_at(sort: Desc)], map: "condition_reports_tenant_type_idx", where: raw("(tenant_id IS NOT NULL)"))
+  @@index([vacancy_campaign_id, created_at(sort: Desc)], map: "condition_reports_vacancy_campaign_idx", where: raw("(vacancy_campaign_id IS NOT NULL)"))
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model contact_messages {
+  id              String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name            String
+  email           String
+  message         String
+  created_at      DateTime       @default(now()) @db.Timestamptz(6)
+  organization_id String?        @db.Uuid
+  organizations   organizations? @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([created_at(sort: Desc)])
+  @@index([email])
+  @@index([organization_id])
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model contractor_directory {
+  id                        String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id           String                      @db.Uuid
+  owner_id                  String?                     @db.Uuid
+  company_name              String
+  contact_name              String?
+  email                     String?
+  phone                     String?
+  whatsapp                  String?
+  is_active                 Boolean                     @default(true)
+  notes                     String?
+  created_at                DateTime                    @default(now()) @db.Timestamptz(6)
+  updated_at                DateTime                    @default(now()) @db.Timestamptz(6)
+  organizations             organizations               @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  owners                    owners?                     @relation(fields: [owner_id], references: [id], onUpdate: NoAction)
+  contractor_quote_requests contractor_quote_requests[]
+  contractor_quotes         contractor_quotes[]
+  contractor_specialties    contractor_specialties[]
+  maintenance_assignments   maintenance_assignments[]
+
+  @@index([organization_id, is_active], map: "contractor_directory_organization_active_idx")
+  @@index([organization_id, created_at(sort: Desc)], map: "contractor_directory_organization_created_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model contractor_quote_requests {
+  id                      String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id         String                @db.Uuid
+  maintenance_workflow_id String                @db.Uuid
+  ticket_id               String                @db.Uuid
+  contractor_id           String                @db.Uuid
+  request_channel         String                @default("email")
+  status                  String                @default("requested")
+  requested_at            DateTime              @default(now()) @db.Timestamptz(6)
+  responded_at            DateTime?             @db.Timestamptz(6)
+  expires_at              DateTime?             @db.Timestamptz(6)
+  request_message         String?
+  provider_reference      String?
+  created_at              DateTime              @default(now()) @db.Timestamptz(6)
+  updated_at              DateTime              @default(now()) @db.Timestamptz(6)
+  contractor_directory    contractor_directory  @relation(fields: [contractor_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  maintenance_workflows   maintenance_workflows @relation(fields: [maintenance_workflow_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  organizations           organizations         @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  support_tickets         support_tickets       @relation(fields: [ticket_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  contractor_quotes       contractor_quotes[]
+
+  @@unique([maintenance_workflow_id, contractor_id], map: "contractor_quote_requests_unique")
+  @@index([ticket_id, created_at(sort: Desc)], map: "contractor_quote_requests_ticket_created_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model contractor_quotes {
+  id                                                                                     String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                                                                        String                     @db.Uuid
+  maintenance_workflow_id                                                                String                     @db.Uuid
+  quote_request_id                                                                       String?                    @db.Uuid
+  contractor_id                                                                          String                     @db.Uuid
+  amount                                                                                 Decimal                    @db.Decimal(12, 2)
+  currency_code                                                                          String
+  scope_of_work                                                                          String
+  availability_note                                                                      String?
+  estimated_start_at                                                                     DateTime?                  @db.Timestamptz(6)
+  estimated_completion_at                                                                DateTime?                  @db.Timestamptz(6)
+  status                                                                                 String                     @default("submitted")
+  submitted_at                                                                           DateTime                   @default(now()) @db.Timestamptz(6)
+  created_at                                                                             DateTime                   @default(now()) @db.Timestamptz(6)
+  updated_at                                                                             DateTime                   @default(now()) @db.Timestamptz(6)
+  contractor_directory                                                                   contractor_directory       @relation(fields: [contractor_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  maintenance_workflows_contractor_quotes_maintenance_workflow_idTomaintenance_workflows maintenance_workflows      @relation("contractor_quotes_maintenance_workflow_idTomaintenance_workflows", fields: [maintenance_workflow_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  organizations                                                                          organizations              @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  contractor_quote_requests                                                              contractor_quote_requests? @relation(fields: [quote_request_id], references: [id], onUpdate: NoAction)
+  maintenance_assignments                                                                maintenance_assignments[]
+  maintenance_workflows_maintenance_workflows_approved_quote_idTocontractor_quotes       maintenance_workflows[]    @relation("maintenance_workflows_approved_quote_idTocontractor_quotes")
+
+  @@index([maintenance_workflow_id, status, submitted_at(sort: Desc)], map: "contractor_quotes_workflow_status_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model contractor_specialties {
+  id                   String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id      String               @db.Uuid
+  contractor_id        String               @db.Uuid
+  specialty            String
+  created_at           DateTime             @default(now()) @db.Timestamptz(6)
+  contractor_directory contractor_directory @relation(fields: [contractor_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  organizations        organizations        @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([contractor_id, specialty], map: "contractor_specialties_unique")
+  @@index([organization_id, specialty], map: "contractor_specialties_organization_specialty_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model integration_events {
+  id                          String                        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id             String?                       @db.Uuid
+  provider                    String
+  event_type                  String
+  dedupe_key                  String?                       @unique(map: "integration_events_dedupe_key_unique_idx", where: raw("(dedupe_key IS NOT NULL)"))
+  payload                     Json                          @default("{}")
+  status                      String                        @default("received")
+  last_error                  String?
+  received_at                 DateTime                      @default(now()) @db.Timestamptz(6)
+  processed_at                DateTime?                     @db.Timestamptz(6)
+  created_at                  DateTime                      @default(now()) @db.Timestamptz(6)
+  updated_at                  DateTime                      @default(now()) @db.Timestamptz(6)
+  organizations               organizations?                @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  whatsapp_inbound_events     whatsapp_inbound_events[]
+  whatsapp_message_deliveries whatsapp_message_deliveries[]
+
+  @@index([organization_id, created_at(sort: Desc)], map: "integration_events_org_created_idx")
+  @@index([provider, status, received_at(sort: Desc)], map: "integration_events_provider_status_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model lease_renewal_intents {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id String        @db.Uuid
+  owner_id        String        @db.Uuid
+  tenant_id       String        @db.Uuid
+  property_id     String?       @db.Uuid
+  broker_id       String?       @db.Uuid
+  lease_end_date  DateTime      @db.Date
+  response        String
+  source          String        @default("tenant_dashboard")
+  responded_at    DateTime      @default(now()) @db.Timestamptz(6)
+  created_at      DateTime      @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime      @default(now()) @db.Timestamptz(6)
+  brokers         brokers?      @relation(fields: [broker_id], references: [id], onUpdate: NoAction)
+  organizations   organizations @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  owners          owners        @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  properties      properties?   @relation(fields: [property_id], references: [id], onUpdate: NoAction)
+  tenants         tenants       @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([tenant_id, lease_end_date], map: "lease_renewal_intents_tenant_lease_unique")
+  @@index([organization_id, owner_id, responded_at(sort: Desc)], map: "lease_renewal_intents_org_owner_idx")
+  @@index([tenant_id, lease_end_date(sort: Desc)], map: "lease_renewal_intents_tenant_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model legal_dates {
+  id                      String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id         String                    @db.Uuid
+  owner_id                String                    @db.Uuid
+  property_id             String                    @db.Uuid
+  tenant_id               String?                   @db.Uuid
+  ejari_expiry            DateTime?                 @db.Date
+  contract_end            DateTime?                 @db.Date
+  rera_notice_date        DateTime?                 @db.Date
+  form12_sent             Boolean                   @default(false)
+  renewal_status          String                    @default("unknown")
+  alert_120_sent_at       DateTime?                 @db.Timestamptz(6)
+  alert_90_sent_at        DateTime?                 @db.Timestamptz(6)
+  alert_60_sent_at        DateTime?                 @db.Timestamptz(6)
+  alert_30_sent_at        DateTime?                 @db.Timestamptz(6)
+  created_at              DateTime                  @default(now()) @db.Timestamptz(6)
+  updated_at              DateTime                  @default(now()) @db.Timestamptz(6)
+  compliance_alert_events compliance_alert_events[]
+  organizations           organizations             @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  owners                  owners                    @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  properties              properties                @relation(fields: [property_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenants                 tenants?                  @relation(fields: [tenant_id], references: [id], onUpdate: NoAction)
+
+  @@index([contract_end], where: raw("(contract_end IS NOT NULL)"))
+  @@index([ejari_expiry], where: raw("(ejari_expiry IS NOT NULL)"))
+  @@index([organization_id, owner_id, created_at(sort: Desc)], map: "legal_dates_org_owner_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model maintenance_assignments {
+  id                      String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id         String                @db.Uuid
+  maintenance_workflow_id String                @unique(map: "maintenance_assignments_unique") @db.Uuid
+  ticket_id               String                @db.Uuid
+  contractor_id           String                @db.Uuid
+  quote_id                String?               @db.Uuid
+  approved_by_owner_id    String                @db.Uuid
+  booking_status          String                @default("approved")
+  appointment_start_at    DateTime?             @db.Timestamptz(6)
+  appointment_end_at      DateTime?             @db.Timestamptz(6)
+  appointment_notes       String?
+  completion_notes        String?
+  completed_at            DateTime?             @db.Timestamptz(6)
+  tenant_confirmed_at     DateTime?             @db.Timestamptz(6)
+  tenant_feedback_rating  Int?
+  tenant_feedback_note    String?
+  follow_up_due_at        DateTime?             @db.Timestamptz(6)
+  follow_up_alert_sent_at DateTime?             @db.Timestamptz(6)
+  created_at              DateTime              @default(now()) @db.Timestamptz(6)
+  updated_at              DateTime              @default(now()) @db.Timestamptz(6)
+  owners                  owners                @relation(fields: [approved_by_owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  contractor_directory    contractor_directory  @relation(fields: [contractor_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  maintenance_workflows   maintenance_workflows @relation(fields: [maintenance_workflow_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  organizations           organizations         @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  contractor_quotes       contractor_quotes?    @relation(fields: [quote_id], references: [id], onUpdate: NoAction)
+  support_tickets         support_tickets       @relation(fields: [ticket_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([ticket_id, booking_status, created_at(sort: Desc)], map: "maintenance_assignments_ticket_status_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model maintenance_cost_entries {
+  id                                                           String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                                              String           @db.Uuid
+  owner_id                                                     String           @db.Uuid
+  property_id                                                  String           @db.Uuid
+  source_ticket_id                                             String?          @db.Uuid
+  source_type                                                  String           @default("manual")
+  recorded_by_role                                             String           @default("system")
+  recorded_by_owner_id                                         String?          @db.Uuid
+  recorded_by_admin_id                                         String?          @db.Uuid
+  vendor_name                                                  String?
+  description                                                  String?
+  invoice_ref                                                  String?
+  amount                                                       Decimal          @db.Decimal(12, 2)
+  incurred_on                                                  DateTime         @db.Date
+  status                                                       String           @default("recorded")
+  created_at                                                   DateTime         @default(now()) @db.Timestamptz(6)
+  updated_at                                                   DateTime         @default(now()) @db.Timestamptz(6)
+  organizations                                                organizations    @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  owners_maintenance_cost_entries_owner_idToowners             owners           @relation("maintenance_cost_entries_owner_idToowners", fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  properties                                                   properties       @relation(fields: [property_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  admin_users                                                  admin_users?     @relation(fields: [recorded_by_admin_id], references: [id], onUpdate: NoAction)
+  owners_maintenance_cost_entries_recorded_by_owner_idToowners owners?          @relation("maintenance_cost_entries_recorded_by_owner_idToowners", fields: [recorded_by_owner_id], references: [id], onUpdate: NoAction)
+  support_tickets                                              support_tickets? @relation(fields: [source_ticket_id], references: [id], onUpdate: NoAction)
+
+  @@index([owner_id, incurred_on(sort: Desc)], map: "maintenance_cost_entries_owner_incurred_idx")
+  @@index([property_id, incurred_on(sort: Desc)], map: "maintenance_cost_entries_property_incurred_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model maintenance_workflows {
+  id                                                                                 String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ticket_id                                                                          String                      @unique(map: "maintenance_workflows_ticket_unique") @db.Uuid
+  organization_id                                                                    String                      @db.Uuid
+  owner_id                                                                           String                      @db.Uuid
+  tenant_id                                                                          String                      @db.Uuid
+  property_id                                                                        String?                     @db.Uuid
+  category                                                                           String
+  urgency                                                                            String                      @default("standard")
+  workflow_status                                                                    String                      @default("triaged")
+  classification_source                                                              String                      @default("rules")
+  classification_notes                                                               String?
+  quote_requested_at                                                                 DateTime?                   @db.Timestamptz(6)
+  approved_quote_id                                                                  String?                     @db.Uuid
+  approved_at                                                                        DateTime?                   @db.Timestamptz(6)
+  approved_by_owner_id                                                               String?                     @db.Uuid
+  follow_up_due_at                                                                   DateTime?                   @db.Timestamptz(6)
+  follow_up_alert_sent_at                                                            DateTime?                   @db.Timestamptz(6)
+  created_at                                                                         DateTime                    @default(now()) @db.Timestamptz(6)
+  updated_at                                                                         DateTime                    @default(now()) @db.Timestamptz(6)
+  contractor_quote_requests                                                          contractor_quote_requests[]
+  contractor_quotes_contractor_quotes_maintenance_workflow_idTomaintenance_workflows contractor_quotes[]         @relation("contractor_quotes_maintenance_workflow_idTomaintenance_workflows")
+  maintenance_assignments                                                            maintenance_assignments?
+  owners_maintenance_workflows_approved_by_owner_idToowners                          owners?                     @relation("maintenance_workflows_approved_by_owner_idToowners", fields: [approved_by_owner_id], references: [id], onUpdate: NoAction)
+  contractor_quotes_maintenance_workflows_approved_quote_idTocontractor_quotes       contractor_quotes?          @relation("maintenance_workflows_approved_quote_idTocontractor_quotes", fields: [approved_quote_id], references: [id], onUpdate: NoAction)
+  organizations                                                                      organizations               @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  owners_maintenance_workflows_owner_idToowners                                      owners                      @relation("maintenance_workflows_owner_idToowners", fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  properties                                                                         properties?                 @relation(fields: [property_id], references: [id], onUpdate: NoAction)
+  tenants                                                                            tenants                     @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  support_tickets                                                                    support_tickets             @relation(fields: [ticket_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([organization_id, workflow_status, created_at(sort: Desc)], map: "maintenance_workflows_organization_status_idx")
+  @@index([owner_id, workflow_status, created_at(sort: Desc)], map: "maintenance_workflows_owner_status_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model message_templates {
+  id              String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id String?        @db.Uuid
+  template_key    String
+  channel         String         @default("email")
+  subject         String?
+  body            String
+  is_active       Boolean        @default(true)
+  created_at      DateTime       @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime       @default(now()) @db.Timestamptz(6)
+  organizations   organizations? @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([organization_id, template_key, channel], map: "message_templates_unique_key_channel")
+  @@index([template_key, channel, is_active], map: "message_templates_key_channel_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model organization_ai_settings {
+  id                            String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id               String        @unique @db.Uuid
+  automation_enabled            Boolean       @default(false)
+  ticket_classification_enabled Boolean       @default(false)
+  reminder_generation_enabled   Boolean       @default(false)
+  ticket_summarization_enabled  Boolean       @default(false)
+  ai_model                      String        @default("gpt-4.1-mini")
+  created_at                    DateTime      @default(now()) @db.Timestamptz(6)
+  updated_at                    DateTime      @default(now()) @db.Timestamptz(6)
+  organizations                 organizations @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([automation_enabled], where: raw("(automation_enabled = true)"))
+  @@index([reminder_generation_enabled], where: raw("(reminder_generation_enabled = true)"))
+  @@index([ticket_classification_enabled], where: raw("(ticket_classification_enabled = true)"))
+  @@index([ticket_summarization_enabled], where: raw("(ticket_summarization_enabled = true)"))
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model organizations {
+  id                              String                            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                            String
+  slug                            String                            @unique
+  plan_code                       String?
+  created_at                      DateTime                          @default(now()) @db.Timestamptz(6)
+  country_code                    String                            @default("IN")
+  currency_code                   String                            @default("INR")
+  audit_logs                      audit_logs[]
+  automation_errors               automation_errors[]
+  automation_jobs                 automation_jobs[]
+  automation_rules                automation_rules[]
+  automation_runs                 automation_runs[]
+  brokers                         brokers[]
+  cash_flow_report_snapshots      cash_flow_report_snapshots[]
+  compliance_alert_events         compliance_alert_events[]
+  condition_report_events         condition_report_events[]
+  condition_report_media          condition_report_media[]
+  condition_report_room_entries   condition_report_room_entries[]
+  condition_reports               condition_reports[]
+  contact_messages                contact_messages[]
+  contractor_directory            contractor_directory[]
+  contractor_quote_requests       contractor_quote_requests[]
+  contractor_quotes               contractor_quotes[]
+  contractor_specialties          contractor_specialties[]
+  integration_events              integration_events[]
+  lease_renewal_intents           lease_renewal_intents[]
+  legal_dates                     legal_dates[]
+  maintenance_assignments         maintenance_assignments[]
+  maintenance_cost_entries        maintenance_cost_entries[]
+  maintenance_workflows           maintenance_workflows[]
+  message_templates               message_templates[]
+  organization_ai_settings        organization_ai_settings?
+  owner_automation_settings       owner_automation_settings[]
+  owner_memberships               owner_memberships[]
+  owner_notification_preferences  owner_notification_preferences[]
+  owner_notifications             owner_notifications[]
+  owners                          owners[]
+  password_reset_tokens           password_reset_tokens[]
+  portfolio_visibility_snapshots  portfolio_visibility_snapshots[]
+  properties                      properties[]
+  property_financial_profiles     property_financial_profiles[]
+  rent_ledger                     rent_ledger[]
+  rent_payment_approvals          rent_payment_approvals[]
+  rent_reminders                  rent_reminders[]
+  screening_applicants            screening_applicants[]
+  screening_documents             screening_documents[]
+  screening_events                screening_events[]
+  screening_questionnaire_answers screening_questionnaire_answers[]
+  subscriptions                   subscriptions?
+  support_ticket_messages         support_ticket_messages[]
+  support_tickets                 support_tickets[]
+  telegram_chat_links             telegram_chat_links[]
+  telegram_delivery_logs          telegram_delivery_logs[]
+  telegram_onboarding_codes       telegram_onboarding_codes[]
+  tenants                         tenants[]
+  vacancy_applications            vacancy_applications[]
+  vacancy_campaign_events         vacancy_campaign_events[]
+  vacancy_campaigns               vacancy_campaigns[]
+  vacancy_leads                   vacancy_leads[]
+  vacancy_viewings                vacancy_viewings[]
+  whatsapp_chat_links             whatsapp_chat_links[]
+  whatsapp_inbound_events         whatsapp_inbound_events[]
+  whatsapp_message_deliveries     whatsapp_message_deliveries[]
+
+  @@index([country_code])
+  @@index([created_at(sort: Desc)])
+  @@index([plan_code])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model owner_automation_settings {
+  id                            String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id               String        @db.Uuid
+  owner_id                      String        @db.Uuid
+  compliance_alerts_enabled     Boolean       @default(true)
+  rent_chasing_enabled          Boolean       @default(true)
+  portfolio_visibility_enabled  Boolean       @default(true)
+  daily_digest_enabled          Boolean       @default(true)
+  weekly_digest_enabled         Boolean       @default(false)
+  monthly_digest_enabled        Boolean       @default(false)
+  status_command_enabled        Boolean       @default(true)
+  quiet_hours_start             String?
+  quiet_hours_end               String?
+  created_at                    DateTime      @default(now()) @db.Timestamptz(6)
+  updated_at                    DateTime      @default(now()) @db.Timestamptz(6)
+  cash_flow_reporting_enabled   Boolean       @default(true)
+  yield_alert_threshold_percent Decimal?      @db.Decimal(5, 2)
+  yield_alert_cooldown_days     Int           @default(7)
+  organizations                 organizations @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  owners                        owners        @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([organization_id, owner_id], map: "owner_automation_settings_owner_org_unique")
+  @@index([owner_id], map: "owner_automation_settings_owner_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model owner_memberships {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id String        @db.Uuid
+  owner_id        String        @db.Uuid
+  role            String        @default("owner")
+  created_at      DateTime      @default(now()) @db.Timestamptz(6)
+  organizations   organizations @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  owners          owners        @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([organization_id, owner_id], map: "owner_memberships_unique")
+  @@index([organization_id], map: "owner_memberships_organization_idx")
+  @@index([owner_id], map: "owner_memberships_owner_idx")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model owner_notification_preferences {
+  id                                      String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                         String        @db.Uuid
+  owner_id                                String        @db.Uuid
+  ticket_created_email                    Boolean       @default(true)
+  ticket_created_telegram                 Boolean       @default(true)
+  ticket_reply_email                      Boolean       @default(true)
+  ticket_reply_telegram                   Boolean       @default(true)
+  rent_payment_awaiting_approval_email    Boolean       @default(true)
+  rent_payment_awaiting_approval_telegram Boolean       @default(true)
+  created_at                              DateTime      @default(now()) @db.Timestamptz(6)
+  updated_at                              DateTime      @default(now()) @db.Timestamptz(6)
+  organizations                           organizations @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  owners                                  owners        @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([organization_id, owner_id], map: "owner_notification_preferences_owner_org_unique")
+  @@index([owner_id], map: "owner_notification_preferences_owner_idx")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model owner_notifications {
+  id                String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  owner_id          String        @db.Uuid
+  tenant_id         String?       @db.Uuid
+  notification_type String
+  title             String
+  message           String
+  is_read           Boolean       @default(false)
+  created_at        DateTime      @default(now()) @db.Timestamptz(6)
+  updated_at        DateTime      @default(now()) @db.Timestamptz(6)
+  organization_id   String        @db.Uuid
+  organizations     organizations @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  owners            owners        @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenants           tenants?      @relation(fields: [tenant_id], references: [id], onUpdate: NoAction)
+
+  @@index([organization_id])
+  @@index([owner_id, is_read, created_at(sort: Desc)], map: "owner_notifications_owner_idx")
+  @@index([owner_id, is_read, created_at(sort: Desc)], map: "owner_notifications_owner_read_created_idx")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model owners {
+  id                                                                             String                           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email                                                                          String                           @unique
+  password_hash                                                                  String
+  full_name                                                                      String?
+  company_name                                                                   String?
+  support_email                                                                  String?
+  support_whatsapp                                                               String?
+  created_at                                                                     DateTime                         @default(now()) @db.Timestamptz(6)
+  updated_at                                                                     DateTime                         @default(now()) @db.Timestamptz(6)
+  organization_id                                                                String                           @db.Uuid
+  automation_errors                                                              automation_errors[]
+  automation_jobs                                                                automation_jobs[]
+  automation_rules                                                               automation_rules[]
+  automation_runs                                                                automation_runs[]
+  brokers                                                                        brokers[]
+  cash_flow_report_snapshots                                                     cash_flow_report_snapshots[]
+  compliance_alert_events                                                        compliance_alert_events[]
+  condition_report_events                                                        condition_report_events[]
+  condition_reports                                                              condition_reports[]
+  contractor_directory                                                           contractor_directory[]
+  lease_renewal_intents                                                          lease_renewal_intents[]
+  legal_dates                                                                    legal_dates[]
+  maintenance_assignments                                                        maintenance_assignments[]
+  maintenance_cost_entries_maintenance_cost_entries_owner_idToowners             maintenance_cost_entries[]       @relation("maintenance_cost_entries_owner_idToowners")
+  maintenance_cost_entries_maintenance_cost_entries_recorded_by_owner_idToowners maintenance_cost_entries[]       @relation("maintenance_cost_entries_recorded_by_owner_idToowners")
+  maintenance_workflows_maintenance_workflows_approved_by_owner_idToowners       maintenance_workflows[]          @relation("maintenance_workflows_approved_by_owner_idToowners")
+  maintenance_workflows_maintenance_workflows_owner_idToowners                   maintenance_workflows[]          @relation("maintenance_workflows_owner_idToowners")
+  owner_automation_settings                                                      owner_automation_settings[]
+  owner_memberships                                                              owner_memberships[]
+  owner_notification_preferences                                                 owner_notification_preferences[]
+  owner_notifications                                                            owner_notifications[]
+  organizations                                                                  organizations                    @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  password_reset_tokens                                                          password_reset_tokens[]
+  portfolio_visibility_snapshots                                                 portfolio_visibility_snapshots[]
+  properties                                                                     properties[]
+  rent_ledger                                                                    rent_ledger[]
+  rent_payment_approvals_rent_payment_approvals_owner_idToowners                 rent_payment_approvals[]         @relation("rent_payment_approvals_owner_idToowners")
+  rent_payment_approvals_rent_payment_approvals_reviewed_by_owner_idToowners     rent_payment_approvals[]         @relation("rent_payment_approvals_reviewed_by_owner_idToowners")
+  rent_reminders                                                                 rent_reminders[]
+  screening_applicants                                                           screening_applicants[]
+  screening_events                                                               screening_events[]
+  subscriptions                                                                  subscriptions[]
+  support_ticket_messages                                                        support_ticket_messages[]
+  support_tickets                                                                support_tickets[]
+  telegram_chat_links                                                            telegram_chat_links?
+  telegram_delivery_logs                                                         telegram_delivery_logs[]
+  telegram_onboarding_codes                                                      telegram_onboarding_codes[]
+  tenants                                                                        tenants[]
+  vacancy_applications                                                           vacancy_applications[]
+  vacancy_campaigns_vacancy_campaigns_approved_by_owner_idToowners               vacancy_campaigns[]              @relation("vacancy_campaigns_approved_by_owner_idToowners")
+  vacancy_campaigns_vacancy_campaigns_owner_idToowners                           vacancy_campaigns[]              @relation("vacancy_campaigns_owner_idToowners")
+  vacancy_leads                                                                  vacancy_leads[]
+  vacancy_viewings                                                               vacancy_viewings[]
+  whatsapp_chat_links                                                            whatsapp_chat_links[]
+  whatsapp_message_deliveries                                                    whatsapp_message_deliveries[]
+
+  @@index([organization_id])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model password_reset_tokens {
+  id               String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id  String        @db.Uuid
+  owner_id         String?       @db.Uuid
+  tenant_id        String?       @db.Uuid
+  user_role        String
+  email            String?
+  tenant_access_id String?
+  token_hash       String        @unique
+  expires_at       DateTime      @db.Timestamptz(6)
+  consumed_at      DateTime?     @db.Timestamptz(6)
+  created_at       DateTime      @default(now()) @db.Timestamptz(6)
+  organizations    organizations @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  owners           owners?       @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenants          tenants?      @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([owner_id, expires_at(sort: Desc)], map: "password_reset_tokens_owner_idx")
+  @@index([user_role, consumed_at, expires_at(sort: Desc)], map: "password_reset_tokens_role_consumed_idx")
+  @@index([tenant_id, expires_at(sort: Desc)], map: "password_reset_tokens_tenant_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model plans {
+  plan_code     String          @id
+  plan_name     String
+  monthly_price Int             @default(0)
+  features      Json            @default("[]")
+  created_at    DateTime        @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime        @default(now()) @db.Timestamptz(6)
+  subscriptions subscriptions[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model portfolio_visibility_snapshots {
+  id                        String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id           String           @db.Uuid
+  owner_id                  String           @db.Uuid
+  automation_job_id         String?          @db.Uuid
+  automation_run_id         String?          @db.Uuid
+  snapshot_scope            String
+  trigger_type              String
+  snapshot_label            String
+  period_start              DateTime         @db.Date
+  period_end                DateTime         @db.Date
+  currency_code             String           @default("INR")
+  active_tenant_count       Int              @default(0)
+  open_ticket_count         Int              @default(0)
+  new_ticket_count          Int              @default(0)
+  urgent_open_ticket_count  Int              @default(0)
+  stale_ticket_count        Int              @default(0)
+  overdue_rent_count        Int              @default(0)
+  reminders_pending_count   Int              @default(0)
+  awaiting_approvals_count  Int              @default(0)
+  occupied_property_count   Int              @default(0)
+  vacant_property_count     Int              @default(0)
+  upcoming_compliance_count Int              @default(0)
+  payload                   Json             @default("{}")
+  created_at                DateTime         @default(now()) @db.Timestamptz(6)
+  automation_jobs           automation_jobs? @relation(fields: [automation_job_id], references: [id], onUpdate: NoAction)
+  automation_runs           automation_runs? @relation(fields: [automation_run_id], references: [id], onUpdate: NoAction)
+  organizations             organizations    @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  owners                    owners           @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([organization_id, snapshot_scope, created_at(sort: Desc)], map: "portfolio_visibility_snapshots_org_scope_created_idx")
+  @@index([owner_id, snapshot_scope, created_at(sort: Desc)], map: "portfolio_visibility_snapshots_owner_scope_created_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model properties {
+  id                          String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  owner_id                    String                       @db.Uuid
+  property_name               String
+  address                     String
+  unit_number                 String?
+  created_at                  DateTime                     @default(now()) @db.Timestamptz(6)
+  updated_at                  DateTime                     @default(now()) @db.Timestamptz(6)
+  organization_id             String                       @db.Uuid
+  occupancy_status            String                       @default("occupied")
+  expected_vacancy_date       DateTime?                    @db.Date
+  vacancy_marked_at           DateTime?                    @db.Timestamptz(6)
+  availability_notes          String?
+  compliance_alert_events     compliance_alert_events[]
+  condition_reports           condition_reports[]
+  lease_renewal_intents       lease_renewal_intents[]
+  legal_dates                 legal_dates[]
+  maintenance_cost_entries    maintenance_cost_entries[]
+  maintenance_workflows       maintenance_workflows[]
+  organizations               organizations                @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  owners                      owners                       @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  property_financial_profiles property_financial_profiles?
+  rent_ledger                 rent_ledger[]
+  rent_payment_approvals      rent_payment_approvals[]
+  screening_applicants        screening_applicants[]
+  tenants                     tenants[]
+  vacancy_applications        vacancy_applications[]
+  vacancy_campaigns           vacancy_campaigns?
+  vacancy_leads               vacancy_leads[]
+  vacancy_viewings            vacancy_viewings[]
+
+  @@index([expected_vacancy_date], where: raw("(expected_vacancy_date IS NOT NULL)"))
+  @@index([organization_id])
+  @@index([organization_id, occupancy_status, created_at(sort: Desc)], map: "properties_organization_occupancy_status_idx")
+  @@index([owner_id, created_at(sort: Desc)], map: "properties_owner_created_idx")
+  @@index([owner_id])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model property_financial_profiles {
+  id                     String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id        String        @db.Uuid
+  property_id            String        @unique(map: "property_financial_profiles_unique_property") @db.Uuid
+  service_charge_monthly Decimal       @default(0) @db.Decimal(12, 2)
+  agency_fee_monthly     Decimal       @default(0) @db.Decimal(12, 2)
+  property_value         Decimal?      @db.Decimal(14, 2)
+  target_yield_percent   Decimal?      @db.Decimal(5, 2)
+  created_at             DateTime      @default(now()) @db.Timestamptz(6)
+  updated_at             DateTime      @default(now()) @db.Timestamptz(6)
+  organizations          organizations @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  properties             properties    @relation(fields: [property_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([organization_id, property_id], map: "property_financial_profiles_org_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model rent_ledger {
+  id                    String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id       String        @db.Uuid
+  owner_id              String        @db.Uuid
+  tenant_id             String        @db.Uuid
+  property_id           String        @db.Uuid
+  cycle_year            Int
+  cycle_month           Int
+  due_date              DateTime      @db.Date
+  amount_due            Decimal       @default(0) @db.Decimal(12, 2)
+  amount_paid           Decimal       @default(0) @db.Decimal(12, 2)
+  paid_date             DateTime?     @db.Date
+  status                String        @default("pending")
+  reminder_count        Int           @default(0)
+  last_reminder_sent_at DateTime?     @db.Timestamptz(6)
+  created_at            DateTime      @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime      @default(now()) @db.Timestamptz(6)
+  organizations         organizations @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  owners                owners        @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  properties            properties    @relation(fields: [property_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenants               tenants       @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([organization_id, tenant_id, cycle_year, cycle_month], map: "rent_ledger_unique_cycle")
+  @@index([organization_id, cycle_year, cycle_month], map: "rent_ledger_org_cycle_idx")
+  @@index([owner_id, status, due_date], map: "rent_ledger_owner_status_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model rent_payment_approvals {
+  id                                                         String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                                            String        @db.Uuid
+  owner_id                                                   String        @db.Uuid
+  tenant_id                                                  String        @db.Uuid
+  property_id                                                String        @db.Uuid
+  cycle_year                                                 Int
+  cycle_month                                                Int
+  due_date                                                   DateTime      @db.Date
+  amount_paid                                                Decimal       @default(0) @db.Decimal(12, 2)
+  status                                                     String        @default("awaiting_owner_approval")
+  rejection_reason                                           String?
+  reviewed_by_owner_id                                       String?       @db.Uuid
+  reviewed_at                                                DateTime?     @db.Timestamptz(6)
+  created_at                                                 DateTime      @default(now()) @db.Timestamptz(6)
+  updated_at                                                 DateTime      @default(now()) @db.Timestamptz(6)
+  organizations                                              organizations @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  owners_rent_payment_approvals_owner_idToowners             owners        @relation("rent_payment_approvals_owner_idToowners", fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  properties                                                 properties    @relation(fields: [property_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  owners_rent_payment_approvals_reviewed_by_owner_idToowners owners?       @relation("rent_payment_approvals_reviewed_by_owner_idToowners", fields: [reviewed_by_owner_id], references: [id], onUpdate: NoAction)
+  tenants                                                    tenants       @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([organization_id, tenant_id, cycle_year, cycle_month], map: "rent_payment_approvals_unique_active_cycle_idx", where: raw("(status = ANY (ARRAY['awaiting_owner_approval'::text, 'approved'::text]))"))
+  @@index([organization_id, owner_id, status, created_at(sort: Desc)], map: "rent_payment_approvals_org_owner_status_idx")
+  @@index([organization_id, tenant_id, cycle_year, cycle_month], map: "rent_payment_approvals_org_tenant_cycle_idx")
+  @@index([owner_id, created_at(sort: Desc)], map: "rent_payment_approvals_owner_created_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model rent_reminders {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenant_id       String        @db.Uuid
+  owner_id        String        @db.Uuid
+  reminder_type   String
+  scheduled_for   DateTime      @db.Timestamptz(6)
+  sent_at         DateTime?     @db.Timestamptz(6)
+  status          String        @default("pending")
+  created_at      DateTime      @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime      @default(now()) @db.Timestamptz(6)
+  organization_id String        @db.Uuid
+  organizations   organizations @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  owners          owners        @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenants         tenants       @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([tenant_id, reminder_type, scheduled_for], map: "rent_reminders_unique_idx")
+  @@index([organization_id])
+  @@index([owner_id, scheduled_for], map: "rent_reminders_owner_idx")
+  @@index([owner_id, status, scheduled_for], map: "rent_reminders_owner_status_scheduled_idx")
+  @@index([status, scheduled_for], map: "rent_reminders_status_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model screening_applicants {
+  id                              String                            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                 String                            @db.Uuid
+  owner_id                        String                            @db.Uuid
+  property_id                     String?                           @db.Uuid
+  vacancy_campaign_id             String?                           @db.Uuid
+  vacancy_application_id          String?                           @unique(map: "screening_applicants_vacancy_application_unique", where: raw("(vacancy_application_id IS NOT NULL)")) @db.Uuid
+  enquiry_source                  String                            @default("manual_owner")
+  source_reference                String?
+  applicant_name                  String
+  email                           String?
+  phone                           String?
+  employer                        String?
+  monthly_salary                  Decimal?                          @db.Decimal(12, 2)
+  current_residence               String?
+  reason_for_moving               String?
+  number_of_occupants             Int?
+  desired_move_in_date            DateTime?                         @db.Date
+  target_rent_amount              Decimal?                          @db.Decimal(12, 2)
+  identification_status           String                            @default("pending")
+  employment_verification_status  String                            @default("pending")
+  affordability_ratio             Decimal?                          @db.Decimal(8, 4)
+  recommendation_category         String                            @default("unscored")
+  recommendation_summary          String?
+  recommendation_reasons          Json                              @default("[]")
+  recommendation_generated_at     DateTime?                         @db.Timestamptz(6)
+  ai_screening_status             String                            @default("not_requested")
+  viewing_decision                String                            @default("pending")
+  final_disposition               String                            @default("in_review")
+  owner_decision_notes            String?
+  created_at                      DateTime                          @default(now()) @db.Timestamptz(6)
+  updated_at                      DateTime                          @default(now()) @db.Timestamptz(6)
+  organizations                   organizations                     @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  owners                          owners                            @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  properties                      properties?                       @relation(fields: [property_id], references: [id], onUpdate: NoAction)
+  vacancy_applications            vacancy_applications?             @relation(fields: [vacancy_application_id], references: [id], onUpdate: NoAction)
+  vacancy_campaigns               vacancy_campaigns?                @relation(fields: [vacancy_campaign_id], references: [id], onUpdate: NoAction)
+  screening_documents             screening_documents[]
+  screening_events                screening_events[]
+  screening_questionnaire_answers screening_questionnaire_answers[]
+
+  @@index([organization_id, recommendation_category, final_disposition, created_at(sort: Desc)], map: "screening_applicants_org_category_idx")
+  @@index([owner_id, created_at(sort: Desc)], map: "screening_applicants_owner_created_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model screening_documents {
+  id                     String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  screening_applicant_id String               @db.Uuid
+  organization_id        String               @db.Uuid
+  document_type          String
+  file_name              String
+  storage_path           String?
+  public_url             String?
+  mime_type              String?
+  file_size_bytes        BigInt?
+  extraction_status      String               @default("not_requested")
+  verification_status    String               @default("submitted")
+  extracted_payload      Json                 @default("{}")
+  notes                  String?
+  created_at             DateTime             @default(now()) @db.Timestamptz(6)
+  updated_at             DateTime             @default(now()) @db.Timestamptz(6)
+  organizations          organizations        @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  screening_applicants   screening_applicants @relation(fields: [screening_applicant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([screening_applicant_id, document_type, created_at(sort: Desc)], map: "screening_documents_applicant_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model screening_events {
+  id                     String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  screening_applicant_id String               @db.Uuid
+  organization_id        String               @db.Uuid
+  actor_role             String
+  actor_owner_id         String?              @db.Uuid
+  actor_admin_id         String?              @db.Uuid
+  event_type             String
+  title                  String
+  message                String
+  metadata               Json                 @default("{}")
+  created_at             DateTime             @default(now()) @db.Timestamptz(6)
+  admin_users            admin_users?         @relation(fields: [actor_admin_id], references: [id], onUpdate: NoAction)
+  owners                 owners?              @relation(fields: [actor_owner_id], references: [id], onUpdate: NoAction)
+  organizations          organizations        @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  screening_applicants   screening_applicants @relation(fields: [screening_applicant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([screening_applicant_id, created_at(sort: Desc)], map: "screening_events_applicant_idx")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model screening_questionnaire_answers {
+  id                     String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  screening_applicant_id String               @db.Uuid
+  organization_id        String               @db.Uuid
+  answer_key             String
+  answer_label           String
+  answer_value           String?
+  is_verified            Boolean              @default(false)
+  verification_notes     String?
+  created_at             DateTime             @default(now()) @db.Timestamptz(6)
+  updated_at             DateTime             @default(now()) @db.Timestamptz(6)
+  organizations          organizations        @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  screening_applicants   screening_applicants @relation(fields: [screening_applicant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([screening_applicant_id, answer_key], map: "screening_questionnaire_answers_unique_key")
+  @@index([screening_applicant_id, created_at], map: "screening_questionnaire_answers_applicant_idx")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model subscriptions {
+  id                   String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  owner_id             String        @db.Uuid
+  plan_code            String
+  status               String        @default("inactive")
+  current_period_start DateTime?     @db.Timestamptz(6)
+  current_period_end   DateTime?     @db.Timestamptz(6)
+  created_at           DateTime      @default(now()) @db.Timestamptz(6)
+  updated_at           DateTime      @default(now()) @db.Timestamptz(6)
+  organization_id      String        @unique(map: "subscriptions_one_active_per_org_idx", where: raw("(status = ANY (ARRAY['active'::text, 'trialing'::text, 'past_due'::text, 'unpaid'::text]))")) @db.Uuid
+  organizations        organizations @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  owners               owners        @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  plans                plans         @relation(fields: [plan_code], references: [plan_code], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([organization_id])
+  @@index([owner_id, created_at(sort: Desc)], map: "subscriptions_owner_created_idx")
+  @@index([plan_code, status], map: "subscriptions_plan_status_idx")
+  @@index([status, created_at(sort: Desc)], map: "subscriptions_status_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model support_ticket_messages {
+  id               String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ticket_id        String          @db.Uuid
+  organization_id  String          @db.Uuid
+  sender_role      String
+  sender_owner_id  String?         @db.Uuid
+  sender_tenant_id String?         @db.Uuid
+  sender_admin_id  String?         @db.Uuid
+  message          String
+  message_type     String          @default("reply")
+  created_at       DateTime        @default(now()) @db.Timestamptz(6)
+  organizations    organizations   @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  admin_users      admin_users?    @relation(fields: [sender_admin_id], references: [id], onUpdate: NoAction)
+  owners           owners?         @relation(fields: [sender_owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenants          tenants?        @relation(fields: [sender_tenant_id], references: [id], onUpdate: NoAction)
+  support_tickets  support_tickets @relation(fields: [ticket_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([organization_id, ticket_id, created_at], map: "support_ticket_messages_organization_ticket_idx")
+  @@index([ticket_id, created_at], map: "support_ticket_messages_ticket_created_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model support_tickets {
+  id                        String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenant_id                 String                      @db.Uuid
+  owner_id                  String                      @db.Uuid
+  subject                   String
+  message                   String
+  status                    String                      @default("open")
+  created_at                DateTime                    @default(now()) @db.Timestamptz(6)
+  updated_at                DateTime                    @default(now()) @db.Timestamptz(6)
+  organization_id           String                      @db.Uuid
+  ai_category               String?
+  ai_confidence             Decimal?                    @db.Decimal(4, 3)
+  contractor_quote_requests contractor_quote_requests[]
+  maintenance_assignments   maintenance_assignments[]
+  maintenance_cost_entries  maintenance_cost_entries[]
+  maintenance_workflows     maintenance_workflows?
+  support_ticket_messages   support_ticket_messages[]
+  organizations             organizations               @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  owners                    owners                      @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenants                   tenants                     @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([ai_category], where: raw("(ai_category IS NOT NULL)"))
+  @@index([organization_id])
+  @@index([owner_id, created_at(sort: Desc)], map: "support_tickets_owner_created_idx")
+  @@index([owner_id, status], map: "support_tickets_owner_status_idx")
+  @@index([tenant_id, created_at(sort: Desc)], map: "support_tickets_tenant_created_idx")
+  @@index([tenant_id])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model telegram_chat_links {
+  id                  String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id     String        @db.Uuid
+  user_role           String
+  owner_id            String?       @unique(map: "telegram_chat_links_owner_unique") @db.Uuid
+  tenant_id           String?       @unique(map: "telegram_chat_links_tenant_unique") @db.Uuid
+  chat_id             String
+  telegram_user_id    String
+  telegram_username   String?
+  telegram_first_name String?
+  telegram_last_name  String?
+  is_active           Boolean       @default(true)
+  linked_at           DateTime      @default(now()) @db.Timestamptz(6)
+  updated_at          DateTime      @default(now()) @db.Timestamptz(6)
+  organizations       organizations @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  owners              owners?       @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenants             tenants?      @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([organization_id, user_role, is_active], map: "telegram_chat_links_org_role_active_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model telegram_delivery_logs {
+  id                String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id   String?        @db.Uuid
+  owner_id          String?        @db.Uuid
+  tenant_id         String?        @db.Uuid
+  user_role         String         @default("system")
+  event_type        String
+  recipient_chat_id String
+  status            String
+  attempts          Int            @default(1)
+  error_message     String?
+  metadata          Json           @default("{}")
+  created_at        DateTime       @default(now()) @db.Timestamptz(6)
+  updated_at        DateTime       @default(now()) @db.Timestamptz(6)
+  organizations     organizations? @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  owners            owners?        @relation(fields: [owner_id], references: [id], onUpdate: NoAction)
+  tenants           tenants?       @relation(fields: [tenant_id], references: [id], onUpdate: NoAction)
+
+  @@index([owner_id, created_at(sort: Desc)], map: "telegram_delivery_logs_owner_created_idx")
+  @@index([status, created_at(sort: Desc)], map: "telegram_delivery_logs_status_created_idx")
+  @@index([tenant_id, created_at(sort: Desc)], map: "telegram_delivery_logs_tenant_created_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model telegram_onboarding_codes {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code            String        @unique
+  organization_id String        @db.Uuid
+  user_role       String
+  owner_id        String?       @db.Uuid
+  tenant_id       String?       @db.Uuid
+  expires_at      DateTime      @db.Timestamptz(6)
+  consumed_at     DateTime?     @db.Timestamptz(6)
+  created_at      DateTime      @default(now()) @db.Timestamptz(6)
+  organizations   organizations @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  owners          owners?       @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenants         tenants?      @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([expires_at], map: "telegram_onboarding_codes_expires_idx")
+  @@index([user_role, organization_id], map: "telegram_onboarding_codes_role_org_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model tenants {
+  id                          String                        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  owner_id                    String                        @db.Uuid
+  property_id                 String                        @db.Uuid
+  full_name                   String
+  email                       String?
+  phone                       String?
+  tenant_access_id            String                        @unique
+  password_hash               String
+  lease_start_date            DateTime?                     @db.Date
+  lease_end_date              DateTime?                     @db.Date
+  monthly_rent                Decimal                       @default(0) @db.Decimal(12, 2)
+  payment_due_day             Int                           @default(1)
+  payment_status              String                        @default("pending")
+  status                      String                        @default("active")
+  created_at                  DateTime                      @default(now()) @db.Timestamptz(6)
+  updated_at                  DateTime                      @default(now()) @db.Timestamptz(6)
+  organization_id             String                        @db.Uuid
+  broker_id                   String?                       @db.Uuid
+  compliance_alert_events     compliance_alert_events[]
+  condition_report_events     condition_report_events[]
+  condition_reports           condition_reports[]
+  lease_renewal_intents       lease_renewal_intents[]
+  legal_dates                 legal_dates[]
+  maintenance_workflows       maintenance_workflows[]
+  owner_notifications         owner_notifications[]
+  password_reset_tokens       password_reset_tokens[]
+  rent_ledger                 rent_ledger[]
+  rent_payment_approvals      rent_payment_approvals[]
+  rent_reminders              rent_reminders[]
+  support_ticket_messages     support_ticket_messages[]
+  support_tickets             support_tickets[]
+  telegram_chat_links         telegram_chat_links?
+  telegram_delivery_logs      telegram_delivery_logs[]
+  telegram_onboarding_codes   telegram_onboarding_codes[]
+  brokers                     brokers?                      @relation(fields: [broker_id], references: [id], onUpdate: NoAction)
+  organizations               organizations                 @relation(fields: [organization_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  owners                      owners                        @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  properties                  properties                    @relation(fields: [property_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  vacancy_campaigns           vacancy_campaigns[]
+  whatsapp_chat_links         whatsapp_chat_links[]
+  whatsapp_message_deliveries whatsapp_message_deliveries[]
+
+  @@index([tenant_access_id], map: "tenants_access_id_idx")
+  @@index([broker_id])
+  @@index([organization_id])
+  @@index([owner_id])
+  @@index([owner_id, payment_status], map: "tenants_owner_payment_status_idx")
+  @@index([owner_id, status], map: "tenants_owner_status_idx")
+  @@index([property_id])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model vacancy_applications {
+  id                   String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id      String                @db.Uuid
+  vacancy_campaign_id  String                @db.Uuid
+  property_id          String                @db.Uuid
+  owner_id             String                @db.Uuid
+  lead_id              String?               @db.Uuid
+  applicant_name       String
+  desired_move_in_date DateTime?             @db.Date
+  monthly_salary       Decimal?              @db.Decimal(12, 2)
+  status               String                @default("submitted")
+  notes                String?
+  created_at           DateTime              @default(now()) @db.Timestamptz(6)
+  updated_at           DateTime              @default(now()) @db.Timestamptz(6)
+  screening_applicants screening_applicants?
+  vacancy_leads        vacancy_leads?        @relation(fields: [lead_id], references: [id], onUpdate: NoAction)
+  organizations        organizations         @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  owners               owners                @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  properties           properties            @relation(fields: [property_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  vacancy_campaigns    vacancy_campaigns     @relation(fields: [vacancy_campaign_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([vacancy_campaign_id, status, created_at(sort: Desc)], map: "vacancy_applications_campaign_status_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model vacancy_campaign_events {
+  id                  String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id     String            @db.Uuid
+  vacancy_campaign_id String            @db.Uuid
+  event_type          String
+  title               String
+  message             String
+  metadata            Json              @default("{}")
+  created_at          DateTime          @default(now()) @db.Timestamptz(6)
+  organizations       organizations     @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  vacancy_campaigns   vacancy_campaigns @relation(fields: [vacancy_campaign_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([vacancy_campaign_id, created_at(sort: Desc)], map: "vacancy_campaign_events_campaign_created_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model vacancy_campaigns {
+  id                                                    String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id                                       String                    @db.Uuid
+  owner_id                                              String                    @db.Uuid
+  property_id                                           String                    @unique(map: "vacancy_campaigns_active_property_unique_idx", where: raw("(campaign_status = ANY (ARRAY['owner_review'::text, 'approved'::text, 'relisting_in_progress'::text, 'listed'::text]))")) @db.Uuid
+  tenant_id                                             String?                   @db.Uuid
+  source_type                                           String
+  campaign_status                                       String                    @default("owner_review")
+  vacancy_state                                         String                    @default("pre_vacant")
+  expected_vacancy_date                                 DateTime                  @db.Date
+  actual_vacancy_date                                   DateTime?                 @db.Date
+  trigger_reference                                     String?
+  trigger_notes                                         String?
+  listing_title                                         String?
+  listing_description                                   String?
+  listing_features                                      Json                      @default("[]")
+  availability_label                                    String?
+  draft_source                                          String                    @default("template")
+  draft_generation_status                               String                    @default("ready")
+  draft_generated_at                                    DateTime?                 @db.Timestamptz(6)
+  owner_approved_at                                     DateTime?                 @db.Timestamptz(6)
+  approved_by_owner_id                                  String?                   @db.Uuid
+  listing_sync_status                                   String                    @default("pending_approval")
+  listing_provider                                      String?
+  listing_external_id                                   String?
+  listing_url                                           String?
+  enquiry_count                                         Int                       @default(0)
+  scheduled_viewings_count                              Int                       @default(0)
+  applications_count                                    Int                       @default(0)
+  last_status_digest_at                                 DateTime?                 @db.Timestamptz(6)
+  created_at                                            DateTime                  @default(now()) @db.Timestamptz(6)
+  updated_at                                            DateTime                  @default(now()) @db.Timestamptz(6)
+  condition_reports                                     condition_reports[]
+  screening_applicants                                  screening_applicants[]
+  vacancy_applications                                  vacancy_applications[]
+  vacancy_campaign_events                               vacancy_campaign_events[]
+  owners_vacancy_campaigns_approved_by_owner_idToowners owners?                   @relation("vacancy_campaigns_approved_by_owner_idToowners", fields: [approved_by_owner_id], references: [id], onUpdate: NoAction)
+  organizations                                         organizations             @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  owners_vacancy_campaigns_owner_idToowners             owners                    @relation("vacancy_campaigns_owner_idToowners", fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  properties                                            properties                @relation(fields: [property_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenants                                               tenants?                  @relation(fields: [tenant_id], references: [id], onUpdate: NoAction)
+  vacancy_leads                                         vacancy_leads[]
+  vacancy_viewings                                      vacancy_viewings[]
+
+  @@index([expected_vacancy_date, campaign_status], map: "vacancy_campaigns_expected_vacancy_date_idx", where: raw("(campaign_status = ANY (ARRAY['owner_review'::text, 'approved'::text, 'relisting_in_progress'::text, 'listed'::text]))"))
+  @@index([organization_id, owner_id, campaign_status, created_at(sort: Desc)], map: "vacancy_campaigns_org_owner_status_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model vacancy_leads {
+  id                   String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id      String                 @db.Uuid
+  vacancy_campaign_id  String                 @db.Uuid
+  property_id          String                 @db.Uuid
+  owner_id             String                 @db.Uuid
+  full_name            String
+  email                String?
+  phone                String?
+  source               String                 @default("internal")
+  status               String                 @default("new")
+  notes                String?
+  created_at           DateTime               @default(now()) @db.Timestamptz(6)
+  updated_at           DateTime               @default(now()) @db.Timestamptz(6)
+  vacancy_applications vacancy_applications[]
+  organizations        organizations          @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  owners               owners                 @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  properties           properties             @relation(fields: [property_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  vacancy_campaigns    vacancy_campaigns      @relation(fields: [vacancy_campaign_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  vacancy_viewings     vacancy_viewings[]
+
+  @@index([vacancy_campaign_id, status, created_at(sort: Desc)], map: "vacancy_leads_campaign_status_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model vacancy_viewings {
+  id                  String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id     String            @db.Uuid
+  vacancy_campaign_id String            @db.Uuid
+  property_id         String            @db.Uuid
+  owner_id            String            @db.Uuid
+  lead_id             String?           @db.Uuid
+  scheduled_start_at  DateTime          @db.Timestamptz(6)
+  scheduled_end_at    DateTime?         @db.Timestamptz(6)
+  booking_status      String            @default("scheduled")
+  notes               String?
+  calendar_event_id   String?
+  created_at          DateTime          @default(now()) @db.Timestamptz(6)
+  updated_at          DateTime          @default(now()) @db.Timestamptz(6)
+  vacancy_leads       vacancy_leads?    @relation(fields: [lead_id], references: [id], onUpdate: NoAction)
+  organizations       organizations     @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  owners              owners            @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  properties          properties        @relation(fields: [property_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  vacancy_campaigns   vacancy_campaigns @relation(fields: [vacancy_campaign_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([vacancy_campaign_id, booking_status, scheduled_start_at(sort: Desc)], map: "vacancy_viewings_campaign_status_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model whatsapp_chat_links {
+  id                String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id   String        @db.Uuid
+  user_role         String
+  owner_id          String?       @db.Uuid
+  tenant_id         String?       @db.Uuid
+  phone_number      String
+  phone_number_e164 String?
+  is_active         Boolean       @default(true)
+  linked_via        String?
+  linked_at         DateTime      @default(now()) @db.Timestamptz(6)
+  last_inbound_at   DateTime?     @db.Timestamptz(6)
+  created_at        DateTime      @default(now()) @db.Timestamptz(6)
+  updated_at        DateTime      @default(now()) @db.Timestamptz(6)
+  organizations     organizations @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  owners            owners?       @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenants           tenants?      @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([organization_id, owner_id], map: "whatsapp_chat_links_owner_active_unique_idx", where: raw("((user_role = 'owner'::text) AND (owner_id IS NOT NULL))"))
+  @@unique([organization_id, user_role, tenant_id], map: "whatsapp_chat_links_tenant_unique")
+  @@index([organization_id, user_role, is_active, created_at(sort: Desc)], map: "whatsapp_chat_links_org_role_idx")
+  @@index([phone_number_e164], map: "whatsapp_chat_links_phone_e164_idx", where: raw("(phone_number_e164 IS NOT NULL)"))
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model whatsapp_inbound_events {
+  id                          String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id             String?                      @db.Uuid
+  delivery_id                 String?                      @db.Uuid
+  integration_event_id        String?                      @db.Uuid
+  provider                    String                       @default("stub")
+  event_type                  String                       @default("unknown")
+  message_type                String                       @default("unknown")
+  sender                      String?
+  sender_e164                 String?
+  recipient                   String?
+  recipient_e164              String?
+  external_message_id         String?
+  provider_conversation_id    String?
+  payload                     Json                         @default("{}")
+  normalized_payload          Json                         @default("{}")
+  status                      String                       @default("received")
+  last_error                  String?
+  received_at                 DateTime                     @default(now()) @db.Timestamptz(6)
+  processed_at                DateTime?                    @db.Timestamptz(6)
+  created_at                  DateTime                     @default(now()) @db.Timestamptz(6)
+  updated_at                  DateTime                     @default(now()) @db.Timestamptz(6)
+  whatsapp_message_deliveries whatsapp_message_deliveries? @relation(fields: [delivery_id], references: [id], onUpdate: NoAction)
+  integration_events          integration_events?          @relation(fields: [integration_event_id], references: [id], onUpdate: NoAction)
+  organizations               organizations?               @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([external_message_id], map: "whatsapp_inbound_events_message_idx", where: raw("(external_message_id IS NOT NULL)"))
+  @@index([organization_id, created_at(sort: Desc)], map: "whatsapp_inbound_events_org_created_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model whatsapp_message_deliveries {
+  id                       String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organization_id          String?                   @db.Uuid
+  owner_id                 String?                   @db.Uuid
+  tenant_id                String?                   @db.Uuid
+  automation_job_id        String?                   @db.Uuid
+  automation_run_id        String?                   @db.Uuid
+  integration_event_id     String?                   @db.Uuid
+  provider                 String                    @default("stub")
+  policy_mode              String                    @default("template")
+  message_kind             String                    @default("template")
+  template_key             String?
+  recipient                String
+  recipient_e164           String?
+  rendered_body            String?
+  fallback_text            String?
+  action_payload           Json                      @default("{}")
+  provider_message_id      String?
+  provider_conversation_id String?
+  provider_payload         Json                      @default("{}")
+  status                   String                    @default("queued")
+  attempt_key              String?                   @unique(map: "whatsapp_message_deliveries_attempt_key_idx", where: raw("(attempt_key IS NOT NULL)"))
+  last_error               String?
+  sent_at                  DateTime?                 @db.Timestamptz(6)
+  delivered_at             DateTime?                 @db.Timestamptz(6)
+  read_at                  DateTime?                 @db.Timestamptz(6)
+  created_at               DateTime                  @default(now()) @db.Timestamptz(6)
+  updated_at               DateTime                  @default(now()) @db.Timestamptz(6)
+  whatsapp_inbound_events  whatsapp_inbound_events[]
+  automation_jobs          automation_jobs?          @relation(fields: [automation_job_id], references: [id], onUpdate: NoAction)
+  automation_runs          automation_runs?          @relation(fields: [automation_run_id], references: [id], onUpdate: NoAction)
+  integration_events       integration_events?       @relation(fields: [integration_event_id], references: [id], onUpdate: NoAction)
+  organizations            organizations?            @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  owners                   owners?                   @relation(fields: [owner_id], references: [id], onUpdate: NoAction)
+  tenants                  tenants?                  @relation(fields: [tenant_id], references: [id], onUpdate: NoAction)
+
+  @@index([organization_id, status, created_at(sort: Desc)], map: "whatsapp_message_deliveries_org_status_idx")
+  @@index([provider_message_id], map: "whatsapp_message_deliveries_provider_message_idx", where: raw("(provider_message_id IS NOT NULL)"))
+  @@index([recipient_e164, created_at(sort: Desc)], map: "whatsapp_message_deliveries_recipient_idx", where: raw("(recipient_e164 IS NOT NULL)"))
+}

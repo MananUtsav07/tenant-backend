@@ -40,7 +40,7 @@ export const postPublicContactMessage = asyncHandler(async (request: Request, re
       name: parsed.name,
       email: parsed.email,
       message: parsed.message,
-      createdAt: contactMessage.created_at,
+      createdAt: contactMessage.created_at instanceof Date ? contactMessage.created_at.toISOString() : contactMessage.created_at,
     })
   } catch (mailError) {
     console.error('[contact-notification-email-failed]', {

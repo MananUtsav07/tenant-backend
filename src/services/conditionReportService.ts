@@ -1,7 +1,5 @@
-import type { PostgrestError } from '@supabase/supabase-js'
-
 import { AppError } from '../lib/errors.js'
-import { supabaseAdmin } from '../lib/supabase.js'
+import { prisma } from '../lib/db.js'
 import { getAutomationProviderRegistry } from './automation/providers/providerRegistry.js'
 
 export const conditionReportRoomDefinitions = [
@@ -225,10 +223,12 @@ export type AdminConditionReportOverview = {
   page_size: number
 }
 
-function throwIfError(error: PostgrestError | null, message: string) {
-  if (error) {
-    throw new AppError(message, 500, error.message)
-  }
+function toISO(d: Date | null | undefined): string | null {
+  return d ? d.toISOString() : null
+}
+
+function toISODate(d: Date | null | undefined): string | null {
+  return d ? d.toISOString().slice(0, 10) : null
 }
 
 function normalizeRelation<T>(value: T | T[] | null | undefined): T | null {
@@ -264,31 +264,54 @@ function buildReportLabel(reportType: ConditionReportType, property: PropertyRow
 }
 
 async function loadPropertyContext(organizationId: string, propertyId: string) {
-  const { data, error } = await supabaseAdmin
-    .from('properties')
-    .select('id, organization_id, owner_id, property_name, address, unit_number')
-    .eq('organization_id', organizationId)
-    .eq('id', propertyId)
-    .maybeSingle()
-
-  throwIfError(error, 'Failed to load property context')
-  return (data ?? null) as PropertyRow | null
+  const data = await prisma.properties.findFirst({
+    select: { id: true, organization_id: true, owner_id: true, property_name: true, address: true, unit_number: true },
+    where: { organization_id: organizationId, id: propertyId },
+  })
+  return data as PropertyRow | null
 }
 
 async function loadTenantContext(organizationId: string, tenantId: string) {
-  const { data, error } = await supabaseAdmin
-    .from('tenants')
-    .select('id, organization_id, owner_id, property_id, full_name, email, phone, tenant_access_id, lease_start_date, lease_end_date, status')
-    .eq('organization_id', organizationId)
-    .eq('id', tenantId)
-    .maybeSingle()
-
-  throwIfError(error, 'Failed to load tenant context')
-  return (data ?? null) as TenantRow | null
+  const data = await prisma.tenants.findFirst({
+    select: { id: true, organization_id: true, owner_id: true, property_id: true, full_name: true, email: true, phone: true, tenant_access_id: true, lease_start_date: true, lease_end_date: true, status: true },
+    where: { organization_id: organizationId, id: tenantId },
+  })
+  if (!data) return null
+  return {
+    ...data,
+    lease_start_date: toISODate(data.lease_start_date as Date | null),
+    lease_end_date: toISODate(data.lease_end_date as Date | null),
+  } as TenantRow
 }
 
-const conditionReportSelect =
-  'id, organization_id, owner_id, property_id, tenant_id, vacancy_campaign_id, baseline_report_id, report_type, workflow_status, trigger_source, trigger_reference, report_label, report_summary, comparison_status, comparison_summary, ai_analysis_status, ai_analysis_payload, generated_document_status, generated_document_format, generated_document_provider, generated_document_url, generated_document_payload, owner_confirmation_status, owner_confirmation_note, owner_confirmed_at, tenant_confirmation_status, tenant_confirmation_note, tenant_confirmed_at, last_summary_refreshed_at, created_at, updated_at, properties(id, organization_id, owner_id, property_name, address, unit_number), tenants(id, organization_id, owner_id, property_id, full_name, email, phone, tenant_access_id, lease_start_date, lease_end_date, status), owners(id, full_name, company_name, email), organizations(id, name, slug)'
+const conditionReportSelect = {
+  id: true, organization_id: true, owner_id: true, property_id: true, tenant_id: true,
+  vacancy_campaign_id: true, baseline_report_id: true, report_type: true, workflow_status: true,
+  trigger_source: true, trigger_reference: true, report_label: true, report_summary: true,
+  comparison_status: true, comparison_summary: true, ai_analysis_status: true, ai_analysis_payload: true,
+  generated_document_status: true, generated_document_format: true, generated_document_provider: true,
+  generated_document_url: true, generated_document_payload: true, owner_confirmation_status: true,
+  owner_confirmation_note: true, owner_confirmed_at: true, tenant_confirmation_status: true,
+  tenant_confirmation_note: true, tenant_confirmed_at: true, last_summary_refreshed_at: true,
+  created_at: true, updated_at: true,
+  properties: { select: { id: true, organization_id: true, owner_id: true, property_name: true, address: true, unit_number: true } },
+  tenants: { select: { id: true, organization_id: true, owner_id: true, property_id: true, full_name: true, email: true, phone: true, tenant_access_id: true, lease_start_date: true, lease_end_date: true, status: true } },
+  owners: { select: { id: true, full_name: true, company_name: true, email: true } },
+  organizations: { select: { id: true, name: true, slug: true } },
+} as const
+
+function serializeConditionReportRow(row: Record<string, unknown>): ConditionReportRow {
+  const tenants = row.tenants as Record<string, unknown> | null
+  return {
+    ...(row as ConditionReportRow),
+    owner_confirmed_at: toISO(row.owner_confirmed_at as Date | null),
+    tenant_confirmed_at: toISO(row.tenant_confirmed_at as Date | null),
+    last_summary_refreshed_at: toISO(row.last_summary_refreshed_at as Date | null),
+    created_at: toISO(row.created_at as Date) ?? '',
+    updated_at: toISO(row.updated_at as Date) ?? '',
+    tenants: tenants ? { ...tenants, lease_start_date: toISODate(tenants.lease_start_date as Date | null), lease_end_date: toISODate(tenants.lease_end_date as Date | null) } as TenantRow : null,
+  }
+}
 
 async function loadConditionReportRow(input: {
   reportId: string
@@ -296,56 +319,49 @@ async function loadConditionReportRow(input: {
   ownerId?: string
   tenantId?: string
 }) {
-  let request = supabaseAdmin.from('condition_reports').select(conditionReportSelect).eq('organization_id', input.organizationId).eq('id', input.reportId)
+  const where: Record<string, unknown> = { organization_id: input.organizationId, id: input.reportId }
+  if (input.ownerId) where.owner_id = input.ownerId
+  if (input.tenantId) where.tenant_id = input.tenantId
 
-  if (input.ownerId) {
-    request = request.eq('owner_id', input.ownerId)
-  }
-
-  if (input.tenantId) {
-    request = request.eq('tenant_id', input.tenantId)
-  }
-
-  const { data, error } = await request.maybeSingle()
-  throwIfError(error, 'Failed to load condition report')
-  return (data ?? null) as unknown as ConditionReportRow | null
+  const data = await prisma.condition_reports.findFirst({ select: conditionReportSelect, where })
+  if (!data) return null
+  return serializeConditionReportRow(data as unknown as Record<string, unknown>)
 }
 
 async function loadConditionReportRooms(conditionReportId: string, organizationId: string) {
-  const { data, error } = await supabaseAdmin
-    .from('condition_report_room_entries')
-    .select('*')
-    .eq('organization_id', organizationId)
-    .eq('condition_report_id', conditionReportId)
-    .order('display_order', { ascending: true })
-    .order('created_at', { ascending: true })
-
-  throwIfError(error, 'Failed to load condition report rooms')
-  return (data ?? []) as ConditionReportRoomEntryRow[]
+  const data = await prisma.condition_report_room_entries.findMany({
+    where: { organization_id: organizationId, condition_report_id: conditionReportId },
+    orderBy: [{ display_order: 'asc' }, { created_at: 'asc' }],
+  })
+  return data.map((row) => ({
+    ...row,
+    created_at: toISO(row.created_at) ?? '',
+    updated_at: toISO(row.updated_at) ?? '',
+  })) as unknown as ConditionReportRoomEntryRow[]
 }
 
 async function loadConditionReportMedia(conditionReportId: string, organizationId: string) {
-  const { data, error } = await supabaseAdmin
-    .from('condition_report_media')
-    .select('*')
-    .eq('organization_id', organizationId)
-    .eq('condition_report_id', conditionReportId)
-    .order('created_at', { ascending: false })
-
-  throwIfError(error, 'Failed to load condition report media')
-  return (data ?? []) as ConditionReportMediaRow[]
+  const data = await prisma.condition_report_media.findMany({
+    where: { organization_id: organizationId, condition_report_id: conditionReportId },
+    orderBy: { created_at: 'desc' },
+  })
+  return data.map((row) => ({
+    ...row,
+    created_at: toISO(row.created_at) ?? '',
+    updated_at: toISO(row.updated_at) ?? '',
+  })) as unknown as ConditionReportMediaRow[]
 }
 
 async function loadConditionReportEvents(conditionReportId: string, organizationId: string) {
-  const { data, error } = await supabaseAdmin
-    .from('condition_report_events')
-    .select('*')
-    .eq('organization_id', organizationId)
-    .eq('condition_report_id', conditionReportId)
-    .order('created_at', { ascending: false })
+  const data = await prisma.condition_report_events.findMany({
+    where: { organization_id: organizationId, condition_report_id: conditionReportId },
+    orderBy: { created_at: 'desc' },
+  })
 
-  throwIfError(error, 'Failed to load condition report events')
-  return (data ?? []) as ConditionReportEventRow[]
+  return data.map((row) => ({
+    ...row,
+    created_at: toISO(row.created_at) ?? '',
+  })) as unknown as ConditionReportEventRow[]
 }
 
 async function createConditionReportEvent(input: {
@@ -360,25 +376,25 @@ async function createConditionReportEvent(input: {
   message: string
   metadata?: Record<string, unknown>
 }) {
-  const { error } = await supabaseAdmin.from('condition_report_events').insert({
-    condition_report_id: input.conditionReportId,
-    organization_id: input.organizationId,
-    actor_role: input.actorRole,
-    actor_owner_id: input.actorRole === 'owner' ? input.actorOwnerId ?? null : null,
-    actor_tenant_id: input.actorRole === 'tenant' ? input.actorTenantId ?? null : null,
-    actor_admin_id: input.actorRole === 'admin' ? input.actorAdminId ?? null : null,
-    event_type: input.eventType,
-    title: input.title,
-    message: input.message,
-    metadata: input.metadata ?? {},
+  await prisma.condition_report_events.create({
+    data: {
+      condition_report_id: input.conditionReportId,
+      organization_id: input.organizationId,
+      actor_role: input.actorRole,
+      actor_owner_id: input.actorRole === 'owner' ? input.actorOwnerId ?? null : null,
+      actor_tenant_id: input.actorRole === 'tenant' ? input.actorTenantId ?? null : null,
+      actor_admin_id: input.actorRole === 'admin' ? input.actorAdminId ?? null : null,
+      event_type: input.eventType,
+      title: input.title,
+      message: input.message,
+      metadata: (input.metadata ?? {}) as object,
+    },
   })
-
-  throwIfError(error, 'Failed to create condition report event')
 }
 
 async function seedDefaultRooms(conditionReportId: string, organizationId: string) {
-  const { error } = await supabaseAdmin.from('condition_report_room_entries').insert(
-    conditionReportRoomDefinitions.map((entry) => ({
+  await prisma.condition_report_room_entries.createMany({
+    data: conditionReportRoomDefinitions.map((entry) => ({
       condition_report_id: conditionReportId,
       organization_id: organizationId,
       room_label: entry.key,
@@ -386,9 +402,7 @@ async function seedDefaultRooms(conditionReportId: string, organizationId: strin
       condition_rating: 'not_reviewed',
       comparison_result: 'not_applicable',
     })),
-  )
-
-  throwIfError(error, 'Failed to create default condition report rooms')
+  })
 }
 
 function summarizeRoomCompletion(rooms: ConditionReportRoomEntryRow[], media: ConditionReportMediaRow[]) {
@@ -486,22 +500,20 @@ async function loadLatestBaselineMoveInReport(input: {
   propertyId: string
   tenantId?: string | null
 }) {
-  let request = supabaseAdmin
-    .from('condition_reports')
-    .select(conditionReportSelect)
-    .eq('organization_id', input.organizationId)
-    .eq('property_id', input.propertyId)
-    .eq('report_type', 'move_in')
-    .order('created_at', { ascending: false })
-    .limit(1)
-
-  if (input.tenantId) {
-    request = request.eq('tenant_id', input.tenantId)
+  const where: Record<string, unknown> = {
+    organization_id: input.organizationId,
+    property_id: input.propertyId,
+    report_type: 'move_in',
   }
+  if (input.tenantId) where.tenant_id = input.tenantId
 
-  const { data, error } = await request.maybeSingle()
-  throwIfError(error, 'Failed to load move-in baseline report')
-  return (data ?? null) as unknown as ConditionReportRow | null
+  const data = await prisma.condition_reports.findFirst({
+    select: conditionReportSelect,
+    where,
+    orderBy: { created_at: 'desc' },
+  })
+  if (!data) return null
+  return serializeConditionReportRow(data as unknown as Record<string, unknown>)
 }
 
 function computeMoveOutComparison(input: {
@@ -666,16 +678,14 @@ async function refreshConditionReportArtifacts(input: {
   })
 
   if (comparison.roomPatch.size > 0) {
-    const { error: roomPatchError } = await supabaseAdmin.from('condition_report_room_entries').upsert(
-      Array.from(comparison.roomPatch.entries()).map(([roomId, patch]) => ({
-        id: roomId,
-        condition_report_id: report.id,
-        organization_id: report.organization_id,
-        ...patch,
-      })),
-      { onConflict: 'id' },
+    await Promise.all(
+      Array.from(comparison.roomPatch.entries()).map(([roomId, patch]) =>
+        prisma.condition_report_room_entries.update({
+          where: { id: roomId },
+          data: { ...patch, updated_at: new Date() },
+        }),
+      ),
     )
-    throwIfError(roomPatchError, 'Failed to refresh room comparison state')
   }
 
   const summaryText =
@@ -746,9 +756,9 @@ async function refreshConditionReportArtifacts(input: {
         ? 'failed'
         : 'pending_provider'
 
-  const { error } = await supabaseAdmin
-    .from('condition_reports')
-    .update({
+  await prisma.condition_reports.update({
+    where: { id: report.id },
+    data: {
       workflow_status: workflowStatus,
       report_summary: summaryText,
       comparison_status: comparison.comparisonStatus,
@@ -761,13 +771,11 @@ async function refreshConditionReportArtifacts(input: {
       generated_document_provider: rendered.provider,
       generated_document_format: 'html',
       generated_document_url: rendered.documentUrl ?? null,
-      generated_document_payload: payload,
-      last_summary_refreshed_at: new Date().toISOString(),
-    })
-    .eq('organization_id', report.organization_id)
-    .eq('id', report.id)
-
-  throwIfError(error, 'Failed to refresh condition report summary')
+      generated_document_payload: payload as object,
+      last_summary_refreshed_at: new Date(),
+      updated_at: new Date(),
+    },
+  })
 
   return loadConditionReportDetail({
     reportId: report.id,
@@ -782,27 +790,21 @@ async function findExistingOpenReport(input: {
   reportType: ConditionReportType
   vacancyCampaignId?: string | null
 }) {
-  let request = supabaseAdmin
-    .from('condition_reports')
-    .select('id, workflow_status')
-    .eq('organization_id', input.organizationId)
-    .eq('property_id', input.propertyId)
-    .eq('report_type', input.reportType)
-    .not('workflow_status', 'eq', 'cancelled')
-    .order('created_at', { ascending: false })
-    .limit(1)
-
-  if (input.tenantId) {
-    request = request.eq('tenant_id', input.tenantId)
+  const where: Record<string, unknown> = {
+    organization_id: input.organizationId,
+    property_id: input.propertyId,
+    report_type: input.reportType,
+    NOT: { workflow_status: 'cancelled' },
   }
+  if (input.tenantId) where.tenant_id = input.tenantId
+  if (input.vacancyCampaignId) where.vacancy_campaign_id = input.vacancyCampaignId
 
-  if (input.vacancyCampaignId) {
-    request = request.eq('vacancy_campaign_id', input.vacancyCampaignId)
-  }
-
-  const { data, error } = await request.maybeSingle()
-  throwIfError(error, 'Failed to check existing condition report')
-  return data ? (data.id as string) : null
+  const data = await prisma.condition_reports.findFirst({
+    select: { id: true, workflow_status: true },
+    where,
+    orderBy: { created_at: 'desc' },
+  })
+  return data ? data.id : null
 }
 
 async function createConditionReportInternal(input: {
@@ -826,9 +828,8 @@ async function createConditionReportInternal(input: {
   }
 
   const tenant = input.tenantId ? await loadTenantContext(input.organizationId, input.tenantId) : null
-  const { data, error } = await supabaseAdmin
-    .from('condition_reports')
-    .insert({
+  const created = await prisma.condition_reports.create({
+    data: {
       organization_id: input.organizationId,
       owner_id: input.ownerId,
       property_id: input.propertyId,
@@ -841,19 +842,14 @@ async function createConditionReportInternal(input: {
       trigger_reference: input.triggerReference ?? null,
       report_label: buildReportLabel(input.reportType, property),
       comparison_status: input.reportType === 'move_out' ? (input.baselineReportId ? 'pending_review' : 'baseline_missing') : 'not_applicable',
-    })
-    .select('id')
-    .single()
+    },
+    select: { id: true },
+  })
 
-  throwIfError(error, 'Failed to create condition report')
-  if (!data?.id) {
-    throw new AppError('Condition report id was not returned after creation', 500)
-  }
-
-  await seedDefaultRooms(data.id as string, input.organizationId)
+  await seedDefaultRooms(created.id, input.organizationId)
   await createConditionReportEvent({
     organizationId: input.organizationId,
-    conditionReportId: data.id as string,
+    conditionReportId: created.id,
     actorRole: input.actorRole,
     actorOwnerId: input.actorOwnerId ?? null,
     actorTenantId: input.actorTenantId ?? null,
@@ -873,7 +869,7 @@ async function createConditionReportInternal(input: {
   })
 
   return refreshConditionReportArtifacts({
-    reportId: data.id as string,
+    reportId: created.id,
     organizationId: input.organizationId,
   })
 }
@@ -1032,22 +1028,22 @@ export async function updateConditionReportRoomEntry(input: {
     throw new AppError('Condition report not found in your organization', 404)
   }
 
-  const { data, error } = await supabaseAdmin
-    .from('condition_report_room_entries')
-    .update({
-      ...(typeof input.patch.condition_rating === 'string' ? { condition_rating: input.patch.condition_rating } : {}),
-      ...(typeof input.patch.condition_notes !== 'undefined' ? { condition_notes: asNullableString(input.patch.condition_notes) } : {}),
-    })
-    .eq('organization_id', input.organizationId)
-    .eq('condition_report_id', input.reportId)
-    .eq('id', input.roomEntryId)
-    .select('*')
-    .maybeSingle()
+  const updateData: Record<string, unknown> = { updated_at: new Date() }
+  if (typeof input.patch.condition_rating === 'string') updateData.condition_rating = input.patch.condition_rating
+  if (typeof input.patch.condition_notes !== 'undefined') updateData.condition_notes = asNullableString(input.patch.condition_notes)
 
-  throwIfError(error, 'Failed to update condition report room')
-  if (!data) {
+  const existing = await prisma.condition_report_room_entries.findFirst({
+    where: { id: input.roomEntryId, condition_report_id: input.reportId, organization_id: input.organizationId },
+    select: { id: true, room_label: true, condition_rating: true },
+  })
+  if (!existing) {
     throw new AppError('Condition report room not found', 404)
   }
+
+  await prisma.condition_report_room_entries.update({
+    where: { id: input.roomEntryId },
+    data: updateData,
+  })
 
   await createConditionReportEvent({
     organizationId: input.organizationId,
@@ -1055,11 +1051,11 @@ export async function updateConditionReportRoomEntry(input: {
     actorRole: 'owner',
     actorOwnerId: input.ownerId,
     eventType: 'room_updated',
-    title: `${roomLabelDisplay((data as ConditionReportRoomEntryRow).room_label)} updated`,
+    title: `${roomLabelDisplay(existing.room_label as ConditionRoomLabel)} updated`,
     message: 'A room condition entry was updated.',
     metadata: {
       room_entry_id: input.roomEntryId,
-      condition_rating: (data as ConditionReportRoomEntryRow).condition_rating,
+      condition_rating: existing.condition_rating,
     },
   })
 
@@ -1095,26 +1091,20 @@ export async function addConditionReportMediaReference(input: {
     throw new AppError('Condition report not found in your scope', 404)
   }
 
-  const { data: roomEntry, error: roomError } = await supabaseAdmin
-    .from('condition_report_room_entries')
-    .select('*')
-    .eq('organization_id', input.organizationId)
-    .eq('condition_report_id', input.reportId)
-    .eq('id', input.roomEntryId)
-    .maybeSingle()
-
-  throwIfError(roomError, 'Failed to load condition report room')
+  const roomEntry = await prisma.condition_report_room_entries.findFirst({
+    where: { id: input.roomEntryId, condition_report_id: input.reportId, organization_id: input.organizationId },
+    select: { id: true, room_label: true },
+  })
   if (!roomEntry) {
     throw new AppError('Condition report room not found', 404)
   }
 
-  const { data, error } = await supabaseAdmin
-    .from('condition_report_media')
-    .insert({
+  const created = await prisma.condition_report_media.create({
+    data: {
       condition_report_id: input.reportId,
       room_entry_id: input.roomEntryId,
       organization_id: input.organizationId,
-      room_label: (roomEntry as ConditionReportRoomEntryRow).room_label,
+      room_label: roomEntry.room_label,
       media_kind: input.payload.media_kind ?? 'photo',
       media_url: asNullableString(input.payload.media_url),
       storage_path: asNullableString(input.payload.storage_path),
@@ -1125,11 +1115,9 @@ export async function addConditionReportMediaReference(input: {
       ai_analysis_payload: {
         note: 'AI visual analysis can be attached later through the provider registry.',
       },
-    })
-    .select('*')
-    .single()
-
-  throwIfError(error, 'Failed to add condition report media')
+    },
+    select: { id: true },
+  })
 
   await createConditionReportEvent({
     organizationId: input.organizationId,
@@ -1139,12 +1127,12 @@ export async function addConditionReportMediaReference(input: {
     actorTenantId: input.actorTenantId ?? null,
     actorAdminId: input.actorAdminId ?? null,
     eventType: 'media_added',
-    title: `${roomLabelDisplay((roomEntry as ConditionReportRoomEntryRow).room_label)} evidence linked`,
+    title: `${roomLabelDisplay(roomEntry.room_label as ConditionRoomLabel)} evidence linked`,
     message: 'A new media reference was attached to the report.',
     metadata: {
-      media_id: (data as ConditionReportMediaRow).id,
+      media_id: created.id,
       room_entry_id: input.roomEntryId,
-      room_label: (roomEntry as ConditionReportRoomEntryRow).room_label,
+      room_label: roomEntry.room_label,
     },
   })
 
@@ -1173,22 +1161,23 @@ async function updateConditionReportConfirmation(input: {
     throw new AppError('Condition report not found in your scope', 404)
   }
 
-  const nowIso = new Date().toISOString()
-  const patch =
+  const now = new Date()
+  const patchData =
     input.actorRole === 'owner'
       ? {
           owner_confirmation_status: input.status,
           owner_confirmation_note: asNullableString(input.note),
-          owner_confirmed_at: nowIso,
+          owner_confirmed_at: now,
+          updated_at: now,
         }
       : {
           tenant_confirmation_status: input.status,
           tenant_confirmation_note: asNullableString(input.note),
-          tenant_confirmed_at: nowIso,
+          tenant_confirmed_at: now,
+          updated_at: now,
         }
 
-  const { error } = await supabaseAdmin.from('condition_reports').update(patch).eq('organization_id', input.organizationId).eq('id', input.reportId)
-  throwIfError(error, 'Failed to update condition report confirmation')
+  await prisma.condition_reports.update({ where: { id: input.reportId }, data: patchData })
 
   await createConditionReportEvent({
     organizationId: input.organizationId,
@@ -1251,23 +1240,26 @@ async function buildOverviewFromRows(rows: ConditionReportRow[]) {
     return [] as ConditionReportOverview[]
   }
 
-  const [roomsResult, mediaResult] = await Promise.all([
-    supabaseAdmin.from('condition_report_room_entries').select('condition_report_id, condition_rating, condition_notes').in('condition_report_id', reportIds),
-    supabaseAdmin.from('condition_report_media').select('condition_report_id').in('condition_report_id', reportIds),
+  const [roomRows, mediaRows] = await Promise.all([
+    prisma.condition_report_room_entries.findMany({
+      select: { condition_report_id: true, condition_rating: true, condition_notes: true },
+      where: { condition_report_id: { in: reportIds } },
+    }),
+    prisma.condition_report_media.findMany({
+      select: { condition_report_id: true },
+      where: { condition_report_id: { in: reportIds } },
+    }),
   ])
 
-  throwIfError(roomsResult.error, 'Failed to load condition report room completion')
-  throwIfError(mediaResult.error, 'Failed to load condition report media completion')
-
   const roomGroups = new Map<string, ConditionReportRoomEntryRow[]>()
-  for (const row of (roomsResult.data ?? []) as unknown as ConditionReportRoomEntryRow[]) {
+  for (const row of roomRows as unknown as ConditionReportRoomEntryRow[]) {
     const existing = roomGroups.get(row.condition_report_id) ?? []
     existing.push(row)
     roomGroups.set(row.condition_report_id, existing)
   }
 
   const mediaGroups = new Map<string, number>()
-  for (const row of (mediaResult.data ?? []) as Array<{ condition_report_id: string }>) {
+  for (const row of mediaRows) {
     mediaGroups.set(row.condition_report_id, (mediaGroups.get(row.condition_report_id) ?? 0) + 1)
   }
 
@@ -1288,16 +1280,12 @@ export async function getOwnerTenantConditionReports(input: {
   ownerId: string
   tenantId: string
 }) {
-  const { data, error } = await supabaseAdmin
-    .from('condition_reports')
-    .select(conditionReportSelect)
-    .eq('organization_id', input.organizationId)
-    .eq('owner_id', input.ownerId)
-    .eq('tenant_id', input.tenantId)
-    .order('created_at', { ascending: false })
-
-  throwIfError(error, 'Failed to load owner condition reports')
-  const reports = await buildOverviewFromRows((data ?? []) as unknown as ConditionReportRow[])
+  const rawRows = await prisma.condition_reports.findMany({
+    select: conditionReportSelect,
+    where: { organization_id: input.organizationId, owner_id: input.ownerId, tenant_id: input.tenantId },
+    orderBy: { created_at: 'desc' },
+  })
+  const reports = await buildOverviewFromRows(rawRows.map((r) => serializeConditionReportRow(r as unknown as Record<string, unknown>)))
 
   return {
     summary: {
@@ -1324,15 +1312,12 @@ export async function getTenantConditionReports(input: {
   organizationId: string
   tenantId: string
 }) {
-  const { data, error } = await supabaseAdmin
-    .from('condition_reports')
-    .select(conditionReportSelect)
-    .eq('organization_id', input.organizationId)
-    .eq('tenant_id', input.tenantId)
-    .order('created_at', { ascending: false })
-
-  throwIfError(error, 'Failed to load tenant condition reports')
-  const reports = await buildOverviewFromRows((data ?? []) as unknown as ConditionReportRow[])
+  const rawRows = await prisma.condition_reports.findMany({
+    select: conditionReportSelect,
+    where: { organization_id: input.organizationId, tenant_id: input.tenantId },
+    orderBy: { created_at: 'desc' },
+  })
+  const reports = await buildOverviewFromRows(rawRows.map((r) => serializeConditionReportRow(r as unknown as Record<string, unknown>)))
 
   return {
     summary: {
@@ -1361,30 +1346,25 @@ export async function getAdminConditionReportOverview(input: {
   pageSize: number
   reportType?: ConditionReportType
 }) {
-  const from = (input.page - 1) * input.pageSize
-  const to = from + input.pageSize - 1
+  const where: Record<string, unknown> = {}
+  if (input.organizationId) where.organization_id = input.organizationId
+  if (input.reportType) where.report_type = input.reportType
 
-  let request = supabaseAdmin
-    .from('condition_reports')
-    .select(conditionReportSelect, { count: 'exact' })
-    .order('created_at', { ascending: false })
-    .range(from, to)
-
-  if (input.organizationId) {
-    request = request.eq('organization_id', input.organizationId)
-  }
-
-  if (input.reportType) {
-    request = request.eq('report_type', input.reportType)
-  }
-
-  const { data, error, count } = await request
-  throwIfError(error, 'Failed to load admin condition reports')
-  const reports = await buildOverviewFromRows((data ?? []) as unknown as ConditionReportRow[])
+  const [rawRows, total] = await Promise.all([
+    prisma.condition_reports.findMany({
+      select: conditionReportSelect,
+      where,
+      orderBy: { created_at: 'desc' },
+      skip: (input.page - 1) * input.pageSize,
+      take: input.pageSize,
+    }),
+    prisma.condition_reports.count({ where }),
+  ])
+  const reports = await buildOverviewFromRows(rawRows.map((r) => serializeConditionReportRow(r as unknown as Record<string, unknown>)))
 
   return {
     summary: {
-      total_reports: count ?? reports.length,
+      total_reports: total,
       move_in_count: reports.filter((report) => report.report_type === 'move_in').length,
       move_out_count: reports.filter((report) => report.report_type === 'move_out').length,
       pending_confirmations_count: reports.filter(
@@ -1393,7 +1373,7 @@ export async function getAdminConditionReportOverview(input: {
       generated_document_count: reports.filter((report) => report.generated_document_status === 'generated').length,
     },
     reports,
-    total: count ?? reports.length,
+    total,
     page: input.page,
     page_size: input.pageSize,
   } satisfies AdminConditionReportOverview

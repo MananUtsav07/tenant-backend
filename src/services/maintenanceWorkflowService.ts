@@ -1,7 +1,5 @@
-import type { PostgrestError } from '@supabase/supabase-js'
-
 import { AppError } from '../lib/errors.js'
-import { supabaseAdmin } from '../lib/supabase.js'
+import { prisma } from '../lib/db.js'
 import { deliverOwnerAutomationMessage } from './automation/providers/messageProvider.js'
 import { getAutomationProviderRegistry } from './automation/providers/providerRegistry.js'
 import { createOwnerNotification } from './ownerService.js'
@@ -86,11 +84,7 @@ const urgentKeywords = [
   'urgent',
 ]
 
-function throwIfError(error: PostgrestError | null, message: string): void {
-  if (error) {
-    throw new AppError(message, 500, error.message)
-  }
-}
+function toISO(d: Date | null | undefined): string | null { return d ? d.toISOString() : null }
 
 function normalizeString(value: unknown) {
   return typeof value === 'string' ? value.trim() : ''
@@ -347,106 +341,110 @@ export type MaintenanceWorkflowOverview = {
   relevant_contractors: ContractorSummary[]
 }
 
-function normalizeRelation<T>(value: T | T[] | null | undefined): T | null {
-  if (Array.isArray(value)) {
-    return value[0] ?? null
-  }
-  return value ?? null
-}
-
 async function loadTicketContext(input: {
   ticketId: string
   organizationId?: string
   tenantId?: string
 }): Promise<TicketContext | null> {
-  let request = supabaseAdmin
-    .from('support_tickets')
-    .select(`
-      id,
-      organization_id,
-      owner_id,
-      tenant_id,
-      subject,
-      message,
-      status,
-      created_at,
-      updated_at,
-      tenants(
-        id,
-        full_name,
-        email,
-        tenant_access_id,
-        property_id,
-        properties(id, property_name, unit_number, address)
-      ),
-      owners(id, full_name, company_name, email, support_email),
-      organizations(id, name, slug, currency_code)
-    `)
-    .eq('id', input.ticketId)
+  const where: Record<string, unknown> = { id: input.ticketId }
+  if (input.organizationId) where.organization_id = input.organizationId
+  if (input.tenantId) where.tenant_id = input.tenantId
 
-  if (input.organizationId) {
-    request = request.eq('organization_id', input.organizationId)
-  }
-  if (input.tenantId) {
-    request = request.eq('tenant_id', input.tenantId)
-  }
+  const data = await prisma.support_tickets.findFirst({
+    where,
+    select: {
+      id: true,
+      organization_id: true,
+      owner_id: true,
+      tenant_id: true,
+      subject: true,
+      message: true,
+      status: true,
+      created_at: true,
+      updated_at: true,
+      tenants: {
+        select: {
+          id: true,
+          full_name: true,
+          email: true,
+          tenant_access_id: true,
+          property_id: true,
+          properties: {
+            select: { id: true, property_name: true, unit_number: true, address: true },
+          },
+        },
+      },
+      owners: {
+        select: { id: true, full_name: true, company_name: true, email: true, support_email: true },
+      },
+      organizations: {
+        select: { id: true, name: true, slug: true, currency_code: true },
+      },
+    },
+  })
 
-  const { data, error } = await request.maybeSingle()
-  throwIfError(error, 'Failed to load support ticket context')
-  if (!data) {
-    return null
-  }
+  if (!data) return null
 
-  const row = data as Record<string, unknown>
-  const tenant = normalizeRelation(row.tenants as Record<string, unknown> | Record<string, unknown>[] | null)
-  const property = normalizeRelation(
-    (tenant?.properties as Record<string, unknown> | Record<string, unknown>[] | null | undefined) ?? null,
-  )
+  const tenant = data.tenants ?? null
+  const property = tenant?.properties ?? null
 
   return {
-    id: row.id as string,
-    organization_id: row.organization_id as string,
-    owner_id: row.owner_id as string,
-    tenant_id: row.tenant_id as string,
-    subject: row.subject as string,
-    message: row.message as string,
-    status: row.status as TicketContext['status'],
-    created_at: row.created_at as string,
-    updated_at: row.updated_at as string,
+    id: data.id,
+    organization_id: data.organization_id,
+    owner_id: data.owner_id,
+    tenant_id: data.tenant_id,
+    subject: data.subject,
+    message: data.message,
+    status: data.status as TicketContext['status'],
+    created_at: toISO(data.created_at as Date | null) ?? '',
+    updated_at: toISO(data.updated_at as Date | null) ?? '',
     tenants: tenant
       ? {
-          id: tenant.id as string,
-          full_name: (tenant.full_name as string) ?? 'Tenant',
-          email: (tenant.email as string | null) ?? null,
-          tenant_access_id: (tenant.tenant_access_id as string) ?? '-',
-          property_id: (tenant.property_id as string | null) ?? null,
+          id: tenant.id,
+          full_name: tenant.full_name ?? 'Tenant',
+          email: tenant.email ?? null,
+          tenant_access_id: tenant.tenant_access_id ?? '-',
+          property_id: tenant.property_id ?? null,
           properties: property
             ? {
-                id: property.id as string,
-                property_name: (property.property_name as string | null) ?? null,
-                unit_number: (property.unit_number as string | null) ?? null,
-                address: (property.address as string | null) ?? null,
+                id: property.id,
+                property_name: property.property_name ?? null,
+                unit_number: property.unit_number ?? null,
+                address: (property as Record<string, unknown>).address as string | null ?? null,
               }
             : null,
         }
       : null,
-    owners: normalizeRelation(row.owners as Record<string, unknown> | Record<string, unknown>[] | null) as TicketContext['owners'],
-    organizations: normalizeRelation(
-      row.organizations as Record<string, unknown> | Record<string, unknown>[] | null,
-    ) as TicketContext['organizations'],
+    owners: data.owners
+      ? {
+          id: data.owners.id,
+          full_name: data.owners.full_name ?? null,
+          company_name: (data.owners as Record<string, unknown>).company_name as string | null ?? null,
+          email: data.owners.email ?? null,
+          support_email: (data.owners as Record<string, unknown>).support_email as string | null ?? null,
+        }
+      : null,
+    organizations: data.organizations
+      ? {
+          id: data.organizations.id,
+          name: data.organizations.name ?? null,
+          slug: (data.organizations as Record<string, unknown>).slug as string | null ?? null,
+          currency_code: (data.organizations as Record<string, unknown>).currency_code as string | null ?? null,
+        }
+      : null,
   }
 }
 
 async function appendSystemTicketMessage(input: { ticketId: string; organizationId: string; message: string }) {
-  const { error } = await supabaseAdmin.from('support_ticket_messages').insert({
-    ticket_id: input.ticketId,
-    organization_id: input.organizationId,
-    sender_role: 'system',
-    message: input.message,
-    message_type: 'system',
+  await prisma.support_ticket_messages.create({
+    data: {
+      ticket_id: input.ticketId,
+      organization_id: input.organizationId,
+      sender_role: 'system',
+      message: input.message,
+      message_type: 'system',
+    },
   })
-
-  throwIfError(error, 'Failed to append maintenance system message')
 }
 
 async function updateTicketStatusIfNeeded(input: {
@@ -454,29 +452,22 @@ async function updateTicketStatusIfNeeded(input: {
   organizationId: string
   status: TicketContext['status']
 }) {
-  const { error } = await supabaseAdmin
-    .from('support_tickets')
-    .update({ status: input.status, updated_at: new Date().toISOString() })
-    .eq('id', input.ticketId)
-    .eq('organization_id', input.organizationId)
-    .neq('status', input.status)
-
-  throwIfError(error, 'Failed to sync ticket status')
+  await prisma.support_tickets.updateMany({
+    where: { id: input.ticketId, organization_id: input.organizationId, NOT: { status: input.status } },
+    data: { status: input.status, updated_at: new Date() },
+  })
 }
 
 async function loadContractorRatings(organizationId: string) {
-  const { data, error } = await supabaseAdmin
-    .from('maintenance_assignments')
-    .select('contractor_id, tenant_feedback_rating')
-    .eq('organization_id', organizationId)
-    .not('tenant_feedback_rating', 'is', null)
-
-  throwIfError(error, 'Failed to load contractor ratings')
+  const rows = await prisma.maintenance_assignments.findMany({
+    where: { organization_id: organizationId, tenant_feedback_rating: { not: null } },
+    select: { contractor_id: true, tenant_feedback_rating: true },
+  })
 
   const ratingMap = new Map<string, { total: number; count: number }>()
-  for (const row of data ?? []) {
-    const contractorId = (row as { contractor_id?: string }).contractor_id
-    const rating = (row as { tenant_feedback_rating?: number | null }).tenant_feedback_rating
+  for (const row of rows) {
+    const contractorId = row.contractor_id
+    const rating = row.tenant_feedback_rating
     if (!contractorId || typeof rating !== 'number') {
       continue
     }
@@ -490,37 +481,46 @@ async function loadContractorRatings(organizationId: string) {
   return ratingMap
 }
 async function listOrganizationContractors(organizationId: string) {
-  const [{ data, error }, ratingMap] = await Promise.all([
-    supabaseAdmin
-      .from('contractor_directory')
-      .select('id, organization_id, owner_id, company_name, contact_name, email, phone, whatsapp, is_active, notes, created_at, updated_at, contractor_specialties(specialty)')
-      .eq('organization_id', organizationId)
-      .order('company_name', { ascending: true }),
+  const [rows, ratingMap] = await Promise.all([
+    prisma.contractor_directory.findMany({
+      where: { organization_id: organizationId },
+      select: {
+        id: true,
+        organization_id: true,
+        owner_id: true,
+        company_name: true,
+        contact_name: true,
+        email: true,
+        phone: true,
+        whatsapp: true,
+        is_active: true,
+        notes: true,
+        created_at: true,
+        updated_at: true,
+        contractor_specialties: { select: { specialty: true } },
+      },
+      orderBy: { company_name: 'asc' },
+    }),
     loadContractorRatings(organizationId),
   ])
 
-  throwIfError(error, 'Failed to load contractor directory')
-
-  return (data ?? []).map((row) => {
-    const contractor = row as Record<string, unknown>
-    const specialties = ((contractor.contractor_specialties as Array<Record<string, unknown>> | null | undefined) ?? []).map(
-      (item) => item.specialty as MaintenanceCategory,
-    )
-    const rating = ratingMap.get(contractor.id as string)
+  return rows.map((row) => {
+    const specialties = (row.contractor_specialties ?? []).map((item) => item.specialty as MaintenanceCategory)
+    const rating = ratingMap.get(row.id)
 
     return {
-      id: contractor.id as string,
-      organization_id: contractor.organization_id as string,
-      owner_id: (contractor.owner_id as string | null) ?? null,
-      company_name: contractor.company_name as string,
-      contact_name: (contractor.contact_name as string | null) ?? null,
-      email: (contractor.email as string | null) ?? null,
-      phone: (contractor.phone as string | null) ?? null,
-      whatsapp: (contractor.whatsapp as string | null) ?? null,
-      is_active: Boolean(contractor.is_active),
-      notes: (contractor.notes as string | null) ?? null,
-      created_at: contractor.created_at as string,
-      updated_at: contractor.updated_at as string,
+      id: row.id,
+      organization_id: row.organization_id,
+      owner_id: row.owner_id ?? null,
+      company_name: row.company_name,
+      contact_name: row.contact_name ?? null,
+      email: row.email ?? null,
+      phone: row.phone ?? null,
+      whatsapp: row.whatsapp ?? null,
+      is_active: Boolean(row.is_active),
+      notes: row.notes ?? null,
+      created_at: toISO(row.created_at as Date | null) ?? '',
+      updated_at: toISO(row.updated_at as Date | null) ?? '',
       specialties,
       average_rating: rating && rating.count > 0 ? Number((rating.total / rating.count).toFixed(2)) : null,
       completed_jobs_count: rating?.count ?? 0,
@@ -528,31 +528,48 @@ async function listOrganizationContractors(organizationId: string) {
   })
 }
 
-async function loadWorkflowRecord(ticketId: string, organizationId: string) {
-  const { data, error } = await supabaseAdmin
-    .from('maintenance_workflows')
-    .select('*')
-    .eq('ticket_id', ticketId)
-    .eq('organization_id', organizationId)
-    .maybeSingle()
+function serializeWorkflowRecord(row: Record<string, unknown>): MaintenanceWorkflowRecord {
+  return {
+    id: row.id as string,
+    ticket_id: row.ticket_id as string,
+    organization_id: row.organization_id as string,
+    owner_id: row.owner_id as string,
+    tenant_id: row.tenant_id as string,
+    property_id: (row.property_id as string | null) ?? null,
+    category: row.category as MaintenanceCategory,
+    urgency: row.urgency as MaintenanceUrgency,
+    workflow_status: row.workflow_status as MaintenanceWorkflowStatus,
+    classification_source: row.classification_source as MaintenanceWorkflowRecord['classification_source'],
+    classification_notes: (row.classification_notes as string | null) ?? null,
+    quote_requested_at: toISO(row.quote_requested_at as Date | null),
+    approved_quote_id: (row.approved_quote_id as string | null) ?? null,
+    approved_at: toISO(row.approved_at as Date | null),
+    approved_by_owner_id: (row.approved_by_owner_id as string | null) ?? null,
+    follow_up_due_at: toISO(row.follow_up_due_at as Date | null),
+    follow_up_alert_sent_at: toISO(row.follow_up_alert_sent_at as Date | null),
+    created_at: toISO(row.created_at as Date | null) ?? '',
+    updated_at: toISO(row.updated_at as Date | null) ?? '',
+  }
+}
 
-  throwIfError(error, 'Failed to load maintenance workflow')
-  return (data as MaintenanceWorkflowRecord | null) ?? null
+async function loadWorkflowRecord(ticketId: string, organizationId: string) {
+  const data = await prisma.maintenance_workflows.findFirst({
+    where: { ticket_id: ticketId, organization_id: organizationId },
+  })
+
+  if (!data) return null
+  return serializeWorkflowRecord(data as unknown as Record<string, unknown>)
 }
 
 async function loadWorkflowQuoteRequests(workflowId: string, organizationId: string, contractors: ContractorSummary[]) {
   const contractorMap = new Map(contractors.map((contractor) => [contractor.id, contractor]))
-  const { data, error } = await supabaseAdmin
-    .from('contractor_quote_requests')
-    .select('*')
-    .eq('organization_id', organizationId)
-    .eq('maintenance_workflow_id', workflowId)
-    .order('requested_at', { ascending: false })
+  const rows = await prisma.contractor_quote_requests.findMany({
+    where: { organization_id: organizationId, maintenance_workflow_id: workflowId },
+    orderBy: { requested_at: 'desc' },
+  })
 
-  throwIfError(error, 'Failed to load contractor quote requests')
-
-  return (data ?? []).map((row) => {
-    const record = row as Record<string, unknown>
+  return rows.map((row) => {
+    const record = row as unknown as Record<string, unknown>
     return {
       id: record.id as string,
       organization_id: record.organization_id as string,
@@ -561,13 +578,13 @@ async function loadWorkflowQuoteRequests(workflowId: string, organizationId: str
       contractor_id: record.contractor_id as string,
       request_channel: record.request_channel as QuoteRequestRecord['request_channel'],
       status: record.status as QuoteRequestRecord['status'],
-      requested_at: record.requested_at as string,
-      responded_at: (record.responded_at as string | null) ?? null,
-      expires_at: (record.expires_at as string | null) ?? null,
+      requested_at: toISO(record.requested_at as Date | null) ?? '',
+      responded_at: toISO(record.responded_at as Date | null),
+      expires_at: toISO(record.expires_at as Date | null),
       request_message: (record.request_message as string | null) ?? null,
       provider_reference: (record.provider_reference as string | null) ?? null,
-      created_at: record.created_at as string,
-      updated_at: record.updated_at as string,
+      created_at: toISO(record.created_at as Date | null) ?? '',
+      updated_at: toISO(record.updated_at as Date | null) ?? '',
       contractor: contractorMap.get(record.contractor_id as string) ?? null,
     } satisfies QuoteRequestRecord
   })
@@ -575,17 +592,13 @@ async function loadWorkflowQuoteRequests(workflowId: string, organizationId: str
 
 async function loadWorkflowQuotes(workflowId: string, organizationId: string, contractors: ContractorSummary[]) {
   const contractorMap = new Map(contractors.map((contractor) => [contractor.id, contractor]))
-  const { data, error } = await supabaseAdmin
-    .from('contractor_quotes')
-    .select('*')
-    .eq('organization_id', organizationId)
-    .eq('maintenance_workflow_id', workflowId)
-    .order('submitted_at', { ascending: false })
+  const rows = await prisma.contractor_quotes.findMany({
+    where: { organization_id: organizationId, maintenance_workflow_id: workflowId },
+    orderBy: { submitted_at: 'desc' },
+  })
 
-  throwIfError(error, 'Failed to load contractor quotes')
-
-  return (data ?? []).map((row) => {
-    const record = row as Record<string, unknown>
+  return rows.map((row) => {
+    const record = row as unknown as Record<string, unknown>
     return {
       id: record.id as string,
       organization_id: record.organization_id as string,
@@ -596,12 +609,12 @@ async function loadWorkflowQuotes(workflowId: string, organizationId: string, co
       currency_code: (record.currency_code as string) ?? 'INR',
       scope_of_work: record.scope_of_work as string,
       availability_note: (record.availability_note as string | null) ?? null,
-      estimated_start_at: (record.estimated_start_at as string | null) ?? null,
-      estimated_completion_at: (record.estimated_completion_at as string | null) ?? null,
+      estimated_start_at: toISO(record.estimated_start_at as Date | null),
+      estimated_completion_at: toISO(record.estimated_completion_at as Date | null),
       status: record.status as ContractorQuoteRecord['status'],
-      submitted_at: record.submitted_at as string,
-      created_at: record.created_at as string,
-      updated_at: record.updated_at as string,
+      submitted_at: toISO(record.submitted_at as Date | null) ?? '',
+      created_at: toISO(record.created_at as Date | null) ?? '',
+      updated_at: toISO(record.updated_at as Date | null) ?? '',
       contractor: contractorMap.get(record.contractor_id as string) ?? null,
     } satisfies ContractorQuoteRecord
   })
@@ -616,19 +629,13 @@ async function loadWorkflowAssignment(
   const contractorMap = new Map(contractors.map((contractor) => [contractor.id, contractor]))
   const quoteMap = new Map(quotes.map((quote) => [quote.id, quote]))
 
-  const { data, error } = await supabaseAdmin
-    .from('maintenance_assignments')
-    .select('*')
-    .eq('organization_id', organizationId)
-    .eq('maintenance_workflow_id', workflowId)
-    .maybeSingle()
+  const data = await prisma.maintenance_assignments.findFirst({
+    where: { organization_id: organizationId, maintenance_workflow_id: workflowId },
+  })
 
-  throwIfError(error, 'Failed to load maintenance assignment')
-  if (!data) {
-    return null
-  }
+  if (!data) return null
 
-  const record = data as Record<string, unknown>
+  const record = data as unknown as Record<string, unknown>
   return {
     id: record.id as string,
     organization_id: record.organization_id as string,
@@ -638,18 +645,18 @@ async function loadWorkflowAssignment(
     quote_id: (record.quote_id as string | null) ?? null,
     approved_by_owner_id: record.approved_by_owner_id as string,
     booking_status: record.booking_status as MaintenanceAssignmentStatus,
-    appointment_start_at: (record.appointment_start_at as string | null) ?? null,
-    appointment_end_at: (record.appointment_end_at as string | null) ?? null,
+    appointment_start_at: toISO(record.appointment_start_at as Date | null),
+    appointment_end_at: toISO(record.appointment_end_at as Date | null),
     appointment_notes: (record.appointment_notes as string | null) ?? null,
     completion_notes: (record.completion_notes as string | null) ?? null,
-    completed_at: (record.completed_at as string | null) ?? null,
-    tenant_confirmed_at: (record.tenant_confirmed_at as string | null) ?? null,
+    completed_at: toISO(record.completed_at as Date | null),
+    tenant_confirmed_at: toISO(record.tenant_confirmed_at as Date | null),
     tenant_feedback_rating: typeof record.tenant_feedback_rating === 'number' ? record.tenant_feedback_rating : null,
     tenant_feedback_note: (record.tenant_feedback_note as string | null) ?? null,
-    follow_up_due_at: (record.follow_up_due_at as string | null) ?? null,
-    follow_up_alert_sent_at: (record.follow_up_alert_sent_at as string | null) ?? null,
-    created_at: record.created_at as string,
-    updated_at: record.updated_at as string,
+    follow_up_due_at: toISO(record.follow_up_due_at as Date | null),
+    follow_up_alert_sent_at: toISO(record.follow_up_alert_sent_at as Date | null),
+    created_at: toISO(record.created_at as Date | null) ?? '',
+    updated_at: toISO(record.updated_at as Date | null) ?? '',
     contractor: contractorMap.get(record.contractor_id as string) ?? null,
     quote: record.quote_id ? quoteMap.get(record.quote_id as string) ?? null : null,
   } satisfies MaintenanceAssignmentRecord
@@ -776,9 +783,8 @@ export async function createContractorDirectoryEntry(input: {
   notes?: string | null
   specialties: MaintenanceCategory[]
 }) {
-  const { data, error } = await supabaseAdmin
-    .from('contractor_directory')
-    .insert({
+  const created = await prisma.contractor_directory.create({
+    data: {
       organization_id: input.organizationId,
       owner_id: input.ownerId,
       company_name: input.companyName,
@@ -788,26 +794,23 @@ export async function createContractorDirectoryEntry(input: {
       whatsapp: input.whatsapp ?? null,
       notes: input.notes ?? null,
       is_active: true,
-    })
-    .select('*')
-    .single()
-
-  throwIfError(error, 'Failed to create contractor')
+    },
+    select: { id: true },
+  })
 
   const specialties = Array.from(new Set(input.specialties))
   if (specialties.length > 0) {
-    const { error: specialtiesError } = await supabaseAdmin.from('contractor_specialties').insert(
-      specialties.map((specialty) => ({
+    await prisma.contractor_specialties.createMany({
+      data: specialties.map((specialty) => ({
         organization_id: input.organizationId,
-        contractor_id: data.id,
+        contractor_id: created.id,
         specialty,
       })),
-    )
-    throwIfError(specialtiesError, 'Failed to store contractor specialties')
+    })
   }
 
   const contractors = await listOrganizationContractors(input.organizationId)
-  const contractor = contractors.find((item) => item.id === data.id)
+  const contractor = contractors.find((item) => item.id === created.id)
   if (!contractor) {
     throw new AppError('Contractor created but could not be reloaded', 500)
   }
@@ -843,32 +846,26 @@ export async function updateContractorDirectoryEntry(input: {
   }
 
   if (Object.keys(updatePatch).length > 0) {
-    const { error } = await supabaseAdmin
-      .from('contractor_directory')
-      .update(updatePatch)
-      .eq('id', input.contractorId)
-      .eq('organization_id', input.organizationId)
-    throwIfError(error, 'Failed to update contractor')
+    await prisma.contractor_directory.updateMany({
+      where: { id: input.contractorId, organization_id: input.organizationId },
+      data: updatePatch,
+    })
   }
 
   if (Array.isArray(input.patch.specialties)) {
     const uniqueSpecialties = Array.from(new Set(input.patch.specialties))
-    const { error: deleteError } = await supabaseAdmin
-      .from('contractor_specialties')
-      .delete()
-      .eq('organization_id', input.organizationId)
-      .eq('contractor_id', input.contractorId)
-    throwIfError(deleteError, 'Failed to reset contractor specialties')
+    await prisma.contractor_specialties.deleteMany({
+      where: { organization_id: input.organizationId, contractor_id: input.contractorId },
+    })
 
     if (uniqueSpecialties.length > 0) {
-      const { error: insertError } = await supabaseAdmin.from('contractor_specialties').insert(
-        uniqueSpecialties.map((specialty) => ({
+      await prisma.contractor_specialties.createMany({
+        data: uniqueSpecialties.map((specialty) => ({
           organization_id: input.organizationId,
           contractor_id: input.contractorId,
           specialty,
         })),
-      )
-      throwIfError(insertError, 'Failed to update contractor specialties')
+      })
     }
   }
 
@@ -887,9 +884,8 @@ async function insertWorkflow(input: {
   classificationSource: 'rules' | 'ai' | 'manual'
   classificationNotes?: string | null
 }) {
-  const { data, error } = await supabaseAdmin
-    .from('maintenance_workflows')
-    .insert({
+  const created = await prisma.maintenance_workflows.create({
+    data: {
       ticket_id: input.ticket.id,
       organization_id: input.ticket.organization_id,
       owner_id: input.ticket.owner_id,
@@ -900,11 +896,9 @@ async function insertWorkflow(input: {
       workflow_status: 'triaged',
       classification_source: input.classificationSource,
       classification_notes: input.classificationNotes ?? null,
-    })
-    .select('*')
-    .single()
+    },
+  })
 
-  throwIfError(error, 'Failed to create maintenance workflow')
   await appendSystemTicketMessage({
     ticketId: input.ticket.id,
     organizationId: input.ticket.organization_id,
@@ -915,7 +909,7 @@ async function insertWorkflow(input: {
     organizationId: input.ticket.organization_id,
     status: input.ticket.status === 'open' ? 'in_progress' : input.ticket.status,
   })
-  return data as MaintenanceWorkflowRecord
+  return serializeWorkflowRecord(created as unknown as Record<string, unknown>)
 }
 
 export async function initializeMaintenanceWorkflow(input: {
@@ -954,18 +948,15 @@ export async function initializeMaintenanceWorkflow(input: {
       classificationNotes: input.classificationNotes ?? suggested.rationale,
     })
   } else if (input.manual) {
-    const { error } = await supabaseAdmin
-      .from('maintenance_workflows')
-      .update({
+    await prisma.maintenance_workflows.updateMany({
+      where: { id: existing.id, organization_id: input.organizationId },
+      data: {
         category: input.category ?? existing.category,
         urgency: input.urgency ?? existing.urgency,
         classification_source: 'manual',
         classification_notes: input.classificationNotes ?? existing.classification_notes,
-      })
-      .eq('id', existing.id)
-      .eq('organization_id', input.organizationId)
-
-    throwIfError(error, 'Failed to update maintenance triage')
+      },
+    })
     await appendSystemTicketMessage({
       ticketId: ticket.id,
       organizationId: ticket.organization_id,
@@ -1145,36 +1136,37 @@ export async function requestMaintenanceQuotes(input: {
       expiresAt: expiresAtIso,
     })
 
-    const { error } = await supabaseAdmin.from('contractor_quote_requests').upsert(
-      {
-        organization_id: input.organizationId,
-        maintenance_workflow_id: workflowOverview.id,
-        ticket_id: overview.ticket.id,
-        contractor_id: contractor.id,
-        request_channel: delivery.channel,
-        status: 'requested',
-        requested_at: new Date().toISOString(),
-        expires_at: expiresAtIso,
-        request_message: requestMessage,
-        provider_reference: delivery.providerReference,
+    const upsertData = {
+      organization_id: input.organizationId,
+      maintenance_workflow_id: workflowOverview.id,
+      ticket_id: overview.ticket.id,
+      contractor_id: contractor.id,
+      request_channel: delivery.channel,
+      status: 'requested' as const,
+      requested_at: new Date(),
+      expires_at: expiresAtIso ? new Date(expiresAtIso) : null,
+      request_message: requestMessage,
+      provider_reference: delivery.providerReference,
+    }
+    await prisma.contractor_quote_requests.upsert({
+      where: {
+        maintenance_workflow_id_contractor_id: {
+          maintenance_workflow_id: workflowOverview.id,
+          contractor_id: contractor.id,
+        },
       },
-      {
-        onConflict: 'maintenance_workflow_id,contractor_id',
-      },
-    )
-    throwIfError(error, 'Failed to create contractor quote request')
+      create: upsertData,
+      update: upsertData,
+    })
   }
 
-  const { error: workflowError } = await supabaseAdmin
-    .from('maintenance_workflows')
-    .update({
+  await prisma.maintenance_workflows.updateMany({
+    where: { id: workflowOverview.id, organization_id: input.organizationId },
+    data: {
       workflow_status: 'quote_collection',
-      quote_requested_at: new Date().toISOString(),
-    })
-    .eq('id', workflowOverview.id)
-    .eq('organization_id', input.organizationId)
-
-  throwIfError(workflowError, 'Failed to update maintenance workflow quote collection state')
+      quote_requested_at: new Date(),
+    },
+  })
 
   await appendSystemTicketMessage({
     ticketId: overview.ticket.id,
@@ -1225,32 +1217,32 @@ export async function recordContractorQuote(input: {
     null
 
   if (!quoteRequestId) {
-    const { data: requestData, error: requestError } = await supabaseAdmin
-      .from('contractor_quote_requests')
-      .insert({
+    const now = new Date()
+    const requestData = await prisma.contractor_quote_requests.create({
+      data: {
         organization_id: input.organizationId,
         maintenance_workflow_id: overview.workflow.id,
         ticket_id: overview.ticket.id,
         contractor_id: contractor.id,
         request_channel: 'internal',
         status: 'responded',
-        requested_at: new Date().toISOString(),
-        responded_at: new Date().toISOString(),
+        requested_at: now,
+        responded_at: now,
         request_message: 'Quote captured internally by Prophives operations.',
-      })
-      .select('id')
-      .single()
-    throwIfError(requestError, 'Failed to create internal quote request')
-    input.quoteRequestId = (requestData?.id as string | undefined) ?? null
+      },
+      select: { id: true },
+    })
+    input.quoteRequestId = requestData.id ?? null
     if (!input.quoteRequestId) {
       throw new AppError('Failed to create internal quote request', 500)
     }
   }
 
   const currencyCode = normalizeString(input.currencyCode) || normalizeString(overview.ticket.organizations?.currency_code) || 'INR'
-  const { error } = await supabaseAdmin
-    .from('contractor_quotes')
-    .insert({
+  const estimatedStartIso = coerceIso(input.estimatedStartAt ?? null)
+  const estimatedCompletionIso = coerceIso(input.estimatedCompletionAt ?? null)
+  await prisma.contractor_quotes.create({
+    data: {
       organization_id: input.organizationId,
       maintenance_workflow_id: overview.workflow.id,
       quote_request_id: input.quoteRequestId ?? null,
@@ -1259,30 +1251,22 @@ export async function recordContractorQuote(input: {
       currency_code: currencyCode,
       scope_of_work: input.scopeOfWork,
       availability_note: input.availabilityNote ?? null,
-      estimated_start_at: coerceIso(input.estimatedStartAt ?? null),
-      estimated_completion_at: coerceIso(input.estimatedCompletionAt ?? null),
+      estimated_start_at: estimatedStartIso ? new Date(estimatedStartIso) : null,
+      estimated_completion_at: estimatedCompletionIso ? new Date(estimatedCompletionIso) : null,
       status: 'submitted',
-      submitted_at: new Date().toISOString(),
-    })
+      submitted_at: new Date(),
+    },
+  })
 
-  throwIfError(error, 'Failed to store contractor quote')
+  await prisma.contractor_quote_requests.updateMany({
+    where: { id: input.quoteRequestId ?? '', organization_id: input.organizationId },
+    data: { status: 'responded', responded_at: new Date() },
+  })
 
-  const { error: requestError } = await supabaseAdmin
-    .from('contractor_quote_requests')
-    .update({
-      status: 'responded',
-      responded_at: new Date().toISOString(),
-    })
-    .eq('id', input.quoteRequestId ?? '')
-    .eq('organization_id', input.organizationId)
-  throwIfError(requestError, 'Failed to update quote request response state')
-
-  const { error: workflowError } = await supabaseAdmin
-    .from('maintenance_workflows')
-    .update({ workflow_status: 'owner_review' })
-    .eq('id', overview.workflow.id)
-    .eq('organization_id', input.organizationId)
-  throwIfError(workflowError, 'Failed to update maintenance workflow review state')
+  await prisma.maintenance_workflows.updateMany({
+    where: { id: overview.workflow.id, organization_id: input.organizationId },
+    data: { workflow_status: 'owner_review' },
+  })
 
   await appendSystemTicketMessage({
     ticketId: overview.ticket.id,
@@ -1330,61 +1314,54 @@ export async function approveContractorQuote(input: {
     throw new AppError('Selected contractor not found', 404)
   }
 
-  const { error: acceptError } = await supabaseAdmin
-    .from('contractor_quotes')
-    .update({ status: 'accepted' })
-    .eq('id', selectedQuote.id)
-    .eq('organization_id', input.organizationId)
-  throwIfError(acceptError, 'Failed to accept contractor quote')
+  await prisma.contractor_quotes.updateMany({
+    where: { id: selectedQuote.id, organization_id: input.organizationId },
+    data: { status: 'accepted' },
+  })
 
   const otherQuoteIds = overview.workflow.quotes
     .filter((quote) => quote.id !== selectedQuote.id && quote.status === 'submitted')
     .map((quote) => quote.id)
   if (otherQuoteIds.length > 0) {
-    const { error: rejectError } = await supabaseAdmin
-      .from('contractor_quotes')
-      .update({ status: 'rejected' })
-      .eq('organization_id', input.organizationId)
-      .in('id', otherQuoteIds)
-    throwIfError(rejectError, 'Failed to reject alternate quotes')
+    await prisma.contractor_quotes.updateMany({
+      where: { organization_id: input.organizationId, id: { in: otherQuoteIds } },
+      data: { status: 'rejected' },
+    })
   }
 
   const appointmentStartAt = coerceIso(input.appointmentStartAt ?? null)
   const appointmentEndAt = coerceIso(input.appointmentEndAt ?? null)
   const bookingStatus: MaintenanceAssignmentStatus = appointmentStartAt ? 'scheduled' : 'approved'
 
-  const { error: assignmentError } = await supabaseAdmin.from('maintenance_assignments').upsert(
-    {
-      organization_id: input.organizationId,
-      maintenance_workflow_id: overview.workflow.id,
-      ticket_id: overview.ticket.id,
-      contractor_id: selectedQuote.contractor_id,
-      quote_id: selectedQuote.id,
-      approved_by_owner_id: input.ownerId,
-      booking_status: bookingStatus,
-      appointment_start_at: appointmentStartAt,
-      appointment_end_at: appointmentEndAt,
-      appointment_notes: input.appointmentNotes ?? null,
-      follow_up_due_at: null,
-      follow_up_alert_sent_at: null,
-    },
-    {
-      onConflict: 'maintenance_workflow_id',
-    },
-  )
-  throwIfError(assignmentError, 'Failed to create maintenance assignment')
+  const assignmentData = {
+    organization_id: input.organizationId,
+    maintenance_workflow_id: overview.workflow.id,
+    ticket_id: overview.ticket.id,
+    contractor_id: selectedQuote.contractor_id,
+    quote_id: selectedQuote.id,
+    approved_by_owner_id: input.ownerId,
+    booking_status: bookingStatus,
+    appointment_start_at: appointmentStartAt ? new Date(appointmentStartAt) : null,
+    appointment_end_at: appointmentEndAt ? new Date(appointmentEndAt) : null,
+    appointment_notes: input.appointmentNotes ?? null,
+    follow_up_due_at: null,
+    follow_up_alert_sent_at: null,
+  }
+  await prisma.maintenance_assignments.upsert({
+    where: { maintenance_workflow_id: overview.workflow.id },
+    create: assignmentData,
+    update: assignmentData,
+  })
 
-  const { error: workflowError } = await supabaseAdmin
-    .from('maintenance_workflows')
-    .update({
+  await prisma.maintenance_workflows.updateMany({
+    where: { id: overview.workflow.id, organization_id: input.organizationId },
+    data: {
       approved_quote_id: selectedQuote.id,
-      approved_at: new Date().toISOString(),
+      approved_at: new Date(),
       approved_by_owner_id: input.ownerId,
       workflow_status: appointmentStartAt ? 'scheduled' : 'assigned',
-    })
-    .eq('id', overview.workflow.id)
-    .eq('organization_id', input.organizationId)
-  throwIfError(workflowError, 'Failed to update approved contractor state')
+    },
+  })
 
   await appendSystemTicketMessage({
     ticketId: overview.ticket.id,
@@ -1465,33 +1442,29 @@ export async function updateMaintenanceAssignment(input: {
       ? new Date(Date.now() + followUpHours * 60 * 60 * 1000).toISOString()
       : assignment.follow_up_due_at
 
-  const { error: assignmentError } = await supabaseAdmin
-    .from('maintenance_assignments')
-    .update({
+  await prisma.maintenance_assignments.updateMany({
+    where: { id: assignment.id, organization_id: input.organizationId },
+    data: {
       booking_status: input.bookingStatus,
-      appointment_start_at: appointmentStartAt,
-      appointment_end_at: appointmentEndAt,
+      appointment_start_at: appointmentStartAt ? new Date(appointmentStartAt) : (appointmentStartAt === null ? null : undefined),
+      appointment_end_at: appointmentEndAt ? new Date(appointmentEndAt) : (appointmentEndAt === null ? null : undefined),
       appointment_notes: input.appointmentNotes ?? assignment.appointment_notes,
       completion_notes: input.completionNotes ?? assignment.completion_notes,
-      completed_at: completedAt,
-      follow_up_due_at: followUpDueAt,
-      follow_up_alert_sent_at: input.bookingStatus === 'completed' ? null : assignment.follow_up_alert_sent_at,
-    })
-    .eq('id', assignment.id)
-    .eq('organization_id', input.organizationId)
-  throwIfError(assignmentError, 'Failed to update maintenance assignment')
+      completed_at: completedAt ? new Date(completedAt) : null,
+      follow_up_due_at: followUpDueAt ? new Date(followUpDueAt) : null,
+      follow_up_alert_sent_at: input.bookingStatus === 'completed' ? null : (assignment.follow_up_alert_sent_at ? new Date(assignment.follow_up_alert_sent_at) : null),
+    },
+  })
 
   const workflowStatus = mapAssignmentStatusToWorkflowStatus(input.bookingStatus)
-  const { error: workflowError } = await supabaseAdmin
-    .from('maintenance_workflows')
-    .update({
+  await prisma.maintenance_workflows.updateMany({
+    where: { id: overview.workflow.id, organization_id: input.organizationId },
+    data: {
       workflow_status: workflowStatus,
-      follow_up_due_at: followUpDueAt,
-      follow_up_alert_sent_at: input.bookingStatus === 'completed' ? null : overview.workflow.follow_up_alert_sent_at,
-    })
-    .eq('id', overview.workflow.id)
-    .eq('organization_id', input.organizationId)
-  throwIfError(workflowError, 'Failed to update maintenance workflow status')
+      follow_up_due_at: followUpDueAt ? new Date(followUpDueAt) : null,
+      follow_up_alert_sent_at: input.bookingStatus === 'completed' ? null : (overview.workflow.follow_up_alert_sent_at ? new Date(overview.workflow.follow_up_alert_sent_at) : null),
+    },
+  })
 
   const messageByStatus: Record<MaintenanceAssignmentStatus, string> = {
     approved: 'The approved contractor assignment is now active.',
@@ -1557,24 +1530,20 @@ export async function confirmTenantMaintenanceCompletion(input: {
   const workflowStatus = input.resolved ? 'completed' : 'in_progress'
   const nowIso = new Date().toISOString()
 
-  const { error: assignmentError } = await supabaseAdmin
-    .from('maintenance_assignments')
-    .update({
+  await prisma.maintenance_assignments.updateMany({
+    where: { id: assignment.id, organization_id: input.organizationId },
+    data: {
       booking_status: bookingStatus,
-      tenant_confirmed_at: input.resolved ? nowIso : assignment.tenant_confirmed_at,
+      tenant_confirmed_at: input.resolved ? new Date(nowIso) : (assignment.tenant_confirmed_at ? new Date(assignment.tenant_confirmed_at) : null),
       tenant_feedback_rating: input.feedbackRating ?? null,
       tenant_feedback_note: input.feedbackNote ?? null,
-    })
-    .eq('id', assignment.id)
-    .eq('organization_id', input.organizationId)
-  throwIfError(assignmentError, 'Failed to record tenant maintenance confirmation')
+    },
+  })
 
-  const { error: workflowError } = await supabaseAdmin
-    .from('maintenance_workflows')
-    .update({ workflow_status: workflowStatus })
-    .eq('id', overview.workflow.id)
-    .eq('organization_id', input.organizationId)
-  throwIfError(workflowError, 'Failed to update workflow after tenant confirmation')
+  await prisma.maintenance_workflows.updateMany({
+    where: { id: overview.workflow.id, organization_id: input.organizationId },
+    data: { workflow_status: workflowStatus },
+  })
 
   await appendSystemTicketMessage({
     ticketId: overview.ticket.id,
@@ -1604,19 +1573,16 @@ export async function runMaintenanceFollowUpCheck(input: {
   now?: Date
 }) {
   const now = input.now ?? new Date()
-  const { data: workflowRow, error: workflowError } = await supabaseAdmin
-    .from('maintenance_workflows')
-    .select('ticket_id, follow_up_due_at, follow_up_alert_sent_at')
-    .eq('id', input.workflowId)
-    .eq('organization_id', input.organizationId)
-    .maybeSingle()
-  throwIfError(workflowError, 'Failed to load maintenance follow-up workflow')
+  const workflowRow = await prisma.maintenance_workflows.findFirst({
+    where: { id: input.workflowId, organization_id: input.organizationId },
+    select: { ticket_id: true, follow_up_due_at: true, follow_up_alert_sent_at: true },
+  })
   if (!workflowRow) {
     return { skipped: true, reason: 'workflow_not_found' }
   }
 
-  const dueAt = (workflowRow as { follow_up_due_at?: string | null }).follow_up_due_at
-  const sentAt = (workflowRow as { follow_up_alert_sent_at?: string | null }).follow_up_alert_sent_at
+  const dueAt = toISO(workflowRow.follow_up_due_at as Date | null)
+  const sentAt = toISO(workflowRow.follow_up_alert_sent_at as Date | null)
   if (!dueAt || sentAt) {
     return { skipped: true, reason: 'no_pending_follow_up' }
   }
@@ -1627,7 +1593,7 @@ export async function runMaintenanceFollowUpCheck(input: {
   }
 
   const ticket = await loadTicketContext({
-    ticketId: (workflowRow as { ticket_id: string }).ticket_id,
+    ticketId: workflowRow.ticket_id,
     organizationId: input.organizationId,
   })
   if (!ticket) {
@@ -1678,22 +1644,18 @@ export async function runMaintenanceFollowUpCheck(input: {
     message: 'Prophives flagged this maintenance job for owner follow-up because tenant confirmation is still pending.',
   })
 
-  const { error: workflowUpdateError } = await supabaseAdmin
-    .from('maintenance_workflows')
-    .update({ follow_up_alert_sent_at: now.toISOString() })
-    .eq('id', input.workflowId)
-    .eq('organization_id', input.organizationId)
-  throwIfError(workflowUpdateError, 'Failed to mark maintenance follow-up alert as sent')
+  await prisma.maintenance_workflows.updateMany({
+    where: { id: input.workflowId, organization_id: input.organizationId },
+    data: { follow_up_alert_sent_at: now },
+  })
 
-  const { error: assignmentUpdateError } = await supabaseAdmin
-    .from('maintenance_assignments')
-    .update({
+  await prisma.maintenance_assignments.updateMany({
+    where: { maintenance_workflow_id: input.workflowId, organization_id: input.organizationId },
+    data: {
       booking_status: 'follow_up_required',
-      follow_up_alert_sent_at: now.toISOString(),
-    })
-    .eq('maintenance_workflow_id', input.workflowId)
-    .eq('organization_id', input.organizationId)
-  throwIfError(assignmentUpdateError, 'Failed to update maintenance assignment follow-up state')
+      follow_up_alert_sent_at: now,
+    },
+  })
 
   return {
     skipped: false,

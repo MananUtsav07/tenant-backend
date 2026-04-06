@@ -1,19 +1,11 @@
-import type { PostgrestError } from '@supabase/supabase-js'
-
 import { AppError } from '../lib/errors.js'
-import { supabaseAdmin } from '../lib/supabase.js'
+import { prisma } from '../lib/db.js'
 import { resolveCurrencyCode, type SupportedCountryCode } from '../config/countryCurrency.js'
 import { generateTenantAccessId } from '../utils/ids.js'
 import { getCurrentCycleYearMonth, resolveTenantPaymentStatus, type TenantPaymentStatus } from '../utils/paymentStatus.js'
 import { isTicketSummarizationEnabled } from './ai/featureFlags.js'
 import { createOrganization, upsertOwnerMembership } from './organizationService.js'
 import { upsertOwnerWhatsAppLink, upsertTenantWhatsAppLink } from './whatsappLinkService.js'
-
-function throwIfError(error: PostgrestError | null, message: string): void {
-  if (error) {
-    throw new AppError(message, 500, error.message)
-  }
-}
 
 type TenantWithPaymentFields = {
   id: string
@@ -27,23 +19,21 @@ async function listApprovedTenantIdsForCurrentCycle(input: {
   tenantIds: string[]
   now?: Date
 }): Promise<Set<string>> {
-  if (input.tenantIds.length === 0) {
-    return new Set<string>()
-  }
+  if (input.tenantIds.length === 0) return new Set<string>()
 
   const { cycleYear, cycleMonth } = getCurrentCycleYearMonth(input.now)
-  const { data, error } = await supabaseAdmin
-    .from('rent_payment_approvals')
-    .select('tenant_id')
-    .eq('organization_id', input.organizationId)
-    .eq('cycle_year', cycleYear)
-    .eq('cycle_month', cycleMonth)
-    .eq('status', 'approved')
-    .in('tenant_id', input.tenantIds)
+  const data = await prisma.rent_payment_approvals.findMany({
+    select: { tenant_id: true },
+    where: {
+      organization_id: input.organizationId,
+      cycle_year: cycleYear,
+      cycle_month: cycleMonth,
+      status: 'approved',
+      tenant_id: { in: input.tenantIds },
+    },
+  })
 
-  throwIfError(error, 'Failed to load approved rent payments for current cycle')
-
-  return new Set<string>((data ?? []).map((row) => row.tenant_id as string))
+  return new Set<string>(data.map((row) => row.tenant_id as string))
 }
 
 function applyComputedPaymentStatus<T extends TenantWithPaymentFields>(
@@ -63,14 +53,10 @@ function applyComputedPaymentStatus<T extends TenantWithPaymentFields>(
 }
 
 export async function findOwnerByEmail(email: string) {
-  const { data, error } = await supabaseAdmin
-    .from('owners')
-    .select('*, organizations(id, name, slug, plan_code, country_code, currency_code, created_at)')
-    .eq('email', email)
-    .maybeSingle()
-
-  throwIfError(error, 'Failed to query owner')
-  return data
+  return prisma.owners.findFirst({
+    where: { email },
+    include: { organizations: { select: { id: true, name: true, slug: true, plan_code: true, country_code: true, currency_code: true, created_at: true } } },
+  })
 }
 
 export async function createOwner(input: {
@@ -97,9 +83,8 @@ export async function createOwner(input: {
         })
 
   try {
-    const { data, error } = await supabaseAdmin
-      .from('owners')
-      .insert({
+    const data = await prisma.owners.create({
+      data: {
         email: input.email,
         password_hash: input.password_hash,
         full_name: input.full_name ?? null,
@@ -107,81 +92,42 @@ export async function createOwner(input: {
         support_email: input.support_email ?? input.email,
         support_whatsapp: input.support_whatsapp ?? null,
         organization_id: organization.id,
-      })
-      .select('*, organizations(id, name, slug, plan_code, country_code, currency_code, created_at)')
-      .single()
-
-    throwIfError(error, 'Failed to create owner')
-
-    await upsertOwnerMembership({
-      organization_id: organization.id,
-      owner_id: data.id,
-      role: 'owner',
+      },
+      include: { organizations: { select: { id: true, name: true, slug: true, plan_code: true, country_code: true, currency_code: true, created_at: true } } },
     })
 
-    await upsertOwnerWhatsAppLink({
-      organizationId: organization.id,
-      ownerId: data.id,
-      phoneNumber: input.support_whatsapp ?? null,
-      linkedVia: 'owner_profile',
-    })
+    await upsertOwnerMembership({ organization_id: organization.id, owner_id: data.id, role: 'owner' })
+    await upsertOwnerWhatsAppLink({ organizationId: organization.id, ownerId: data.id, phoneNumber: input.support_whatsapp ?? null, linkedVia: 'owner_profile' })
 
     return data
   } catch (error) {
     if (!input.organization_id) {
-      await supabaseAdmin.from('organizations').delete().eq('id', organization.id)
+      await prisma.organizations.delete({ where: { id: organization.id } }).catch(() => {})
     }
     throw error
   }
 }
 
 export async function getOwnerById(ownerId: string, organizationId?: string) {
-  let request = supabaseAdmin
-    .from('owners')
-    .select('*, organizations(id, name, slug, plan_code, country_code, currency_code, created_at)')
-    .eq('id', ownerId)
-
-  if (organizationId) {
-    request = request.eq('organization_id', organizationId)
-  }
-
-  const { data, error } = await request.maybeSingle()
-  throwIfError(error, 'Failed to fetch owner')
-  return data
+  return prisma.owners.findFirst({
+    where: { id: ownerId, ...(organizationId ? { organization_id: organizationId } : {}) },
+    include: { organizations: { select: { id: true, name: true, slug: true, plan_code: true, country_code: true, currency_code: true, created_at: true } } },
+  })
 }
 
 export async function updateOwnerById(input: {
   ownerId: string
   organizationId?: string
-  patch: Partial<{
-    support_email: string | null
-    support_whatsapp: string | null
-  }>
+  patch: Partial<{ support_email: string | null; support_whatsapp: string | null }>
 }) {
-  let request = supabaseAdmin
-    .from('owners')
-    .update({
-      ...input.patch,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', input.ownerId)
+  const data = await prisma.owners.update({
+    where: { id: input.ownerId },
+    data: { ...input.patch, updated_at: new Date() },
+    include: { organizations: { select: { id: true, name: true, slug: true, plan_code: true, country_code: true, currency_code: true, created_at: true } } },
+  })
 
-  if (input.organizationId) {
-    request = request.eq('organization_id', input.organizationId)
-  }
-
-  const { data, error } = await request
-    .select('*, organizations(id, name, slug, plan_code, country_code, currency_code, created_at)')
-    .maybeSingle()
-
-  throwIfError(error, 'Failed to update owner profile')
-  if (data && Object.prototype.hasOwnProperty.call(input.patch, 'support_whatsapp')) {
-    await upsertOwnerWhatsAppLink({
-      organizationId: data.organization_id,
-      ownerId: data.id,
-      phoneNumber: input.patch.support_whatsapp ?? null,
-      linkedVia: 'owner_profile',
-    })
+  if (Object.prototype.hasOwnProperty.call(input.patch, 'support_whatsapp')) {
+    await upsertOwnerWhatsAppLink({ organizationId: data.organization_id, ownerId: data.id, phoneNumber: input.patch.support_whatsapp ?? null, linkedVia: 'owner_profile' })
   }
   return data
 }
@@ -189,94 +135,44 @@ export async function updateOwnerById(input: {
 export async function createProperty(args: {
   ownerId: string
   organizationId: string
-  input: {
-    property_name: string
-    address: string
-    unit_number?: string
-  }
+  input: { property_name: string; address: string; unit_number?: string }
 }) {
-  const { data, error } = await supabaseAdmin
-    .from('properties')
-    .insert({
+  return prisma.properties.create({
+    data: {
       owner_id: args.ownerId,
       organization_id: args.organizationId,
       property_name: args.input.property_name,
       address: args.input.address,
       unit_number: args.input.unit_number ?? null,
-    })
-    .select('*')
-    .single()
-
-  throwIfError(error, 'Failed to create property')
-  return data
+    },
+  })
 }
 
 export async function listProperties(organizationId: string) {
-  const { data, error } = await supabaseAdmin
-    .from('properties')
-    .select('*')
-    .eq('organization_id', organizationId)
-    .order('created_at', { ascending: false })
-
-  throwIfError(error, 'Failed to list properties')
-  return data ?? []
+  return prisma.properties.findMany({ where: { organization_id: organizationId }, orderBy: { created_at: 'desc' } })
 }
 
 export async function getPropertyForOwner(organizationId: string, propertyId: string) {
-  const { data, error } = await supabaseAdmin
-    .from('properties')
-    .select('*')
-    .eq('id', propertyId)
-    .eq('organization_id', organizationId)
-    .maybeSingle()
-
-  throwIfError(error, 'Failed to fetch property')
-  return data
+  return prisma.properties.findFirst({ where: { id: propertyId, organization_id: organizationId } })
 }
 
 export async function updateProperty(organizationId: string, propertyId: string, patch: Record<string, unknown>) {
-  const { data, error } = await supabaseAdmin
-    .from('properties')
-    .update(patch)
-    .eq('id', propertyId)
-    .eq('organization_id', organizationId)
-    .select('*')
-    .maybeSingle()
-
-  throwIfError(error, 'Failed to update property')
-  return data
+  return prisma.properties.update({ where: { id: propertyId }, data: patch })
 }
 
 export async function deleteProperty(organizationId: string, propertyId: string) {
-  const { error, count } = await supabaseAdmin
-    .from('properties')
-    .delete({ count: 'exact' })
-    .eq('id', propertyId)
-    .eq('organization_id', organizationId)
-
-  throwIfError(error, 'Failed to delete property')
-  return count ?? 0
+  const existing = await prisma.properties.findFirst({ where: { id: propertyId, organization_id: organizationId }, select: { id: true } })
+  if (!existing) return 0
+  await prisma.properties.delete({ where: { id: propertyId } })
+  return 1
 }
 
 async function buildUniqueTenantAccessId(): Promise<string> {
-  let attempts = 0
-
-  while (attempts < 8) {
-    attempts += 1
+  for (let attempts = 0; attempts < 8; attempts++) {
     const candidate = generateTenantAccessId()
-    const { data, error } = await supabaseAdmin
-      .from('tenants')
-      .select('id')
-      .eq('tenant_access_id', candidate)
-      .maybeSingle()
-
-    throwIfError(error, 'Failed to verify tenant access id uniqueness')
-
-    if (!data) {
-      return candidate
-    }
+    const existing = await prisma.tenants.findFirst({ where: { tenant_access_id: candidate }, select: { id: true } })
+    if (!existing) return candidate
   }
-
   throw new AppError('Could not generate unique tenant access id', 500)
 }
 
@@ -300,9 +196,8 @@ export async function createTenant(args: {
 }) {
   const tenantAccessId = await buildUniqueTenantAccessId()
 
-  const { data, error } = await supabaseAdmin
-    .from('tenants')
-    .insert({
+  const data = await prisma.tenants.create({
+    data: {
       owner_id: args.ownerId,
       organization_id: args.organizationId,
       property_id: args.input.property_id,
@@ -312,193 +207,97 @@ export async function createTenant(args: {
       phone: args.input.phone ?? null,
       tenant_access_id: tenantAccessId,
       password_hash: args.input.password_hash,
-      lease_start_date: args.input.lease_start_date ?? null,
-      lease_end_date: args.input.lease_end_date ?? null,
+      lease_start_date: args.input.lease_start_date ? new Date(args.input.lease_start_date) : null,
+      lease_end_date: args.input.lease_end_date ? new Date(args.input.lease_end_date) : null,
       monthly_rent: args.input.monthly_rent,
       payment_due_day: args.input.payment_due_day,
       payment_status: args.input.payment_status ?? 'pending',
       status: args.input.status ?? 'active',
-    })
-    .select('*')
-    .single()
-
-  throwIfError(error, 'Failed to create tenant')
-  await upsertTenantWhatsAppLink({
-    organizationId: args.organizationId,
-    tenantId: data.id,
-    ownerId: args.ownerId,
-    phoneNumber: args.input.phone ?? null,
-    linkedVia: 'tenant_phone',
+    },
   })
+
+  await upsertTenantWhatsAppLink({ organizationId: args.organizationId, tenantId: data.id, ownerId: args.ownerId, phoneNumber: args.input.phone ?? null, linkedVia: 'tenant_phone' })
   return data
 }
 
 export async function listTenants(organizationId: string) {
-  const { data, error } = await supabaseAdmin
-    .from('tenants')
-    .select('*, properties(id, property_name, address, unit_number), brokers(id, full_name, email, phone, agency_name, is_active)')
-    .eq('organization_id', organizationId)
-    .order('created_at', { ascending: false })
-
-  throwIfError(error, 'Failed to list tenants')
-  const tenants = (data ?? []) as TenantWithPaymentFields[]
-  const now = new Date()
-  const approvedTenantIds = await listApprovedTenantIdsForCurrentCycle({
-    organizationId,
-    tenantIds: tenants.map((tenant) => tenant.id),
-    now,
+  const data = await prisma.tenants.findMany({
+    where: { organization_id: organizationId },
+    include: { properties: { select: { id: true, property_name: true, address: true, unit_number: true } }, brokers: { select: { id: true, full_name: true, email: true, phone: true, agency_name: true, is_active: true } } },
+    orderBy: { created_at: 'desc' },
   })
 
-  return applyComputedPaymentStatus(tenants, approvedTenantIds, now)
+  const tenants = data as unknown as TenantWithPaymentFields[]
+  const now = new Date()
+  const approvedTenantIds = await listApprovedTenantIdsForCurrentCycle({ organizationId, tenantIds: tenants.map((t) => t.id), now })
+  return applyComputedPaymentStatus(data as unknown as TenantWithPaymentFields[], approvedTenantIds, now)
 }
 
 export async function getTenantForOwner(organizationId: string, tenantId: string) {
-  const { data, error } = await supabaseAdmin
-    .from('tenants')
-    .select('*, properties(*), brokers(id, full_name, email, phone, agency_name, is_active)')
-    .eq('id', tenantId)
-    .eq('organization_id', organizationId)
-    .maybeSingle()
-
-  throwIfError(error, 'Failed to fetch tenant')
-  if (!data) {
-    return null
-  }
-
-  const now = new Date()
-  const approvedTenantIds = await listApprovedTenantIdsForCurrentCycle({
-    organizationId,
-    tenantIds: [data.id],
-    now,
+  const data = await prisma.tenants.findFirst({
+    where: { id: tenantId, organization_id: organizationId },
+    include: { properties: true, brokers: { select: { id: true, full_name: true, email: true, phone: true, agency_name: true, is_active: true } } },
   })
 
-  return applyComputedPaymentStatus([data as TenantWithPaymentFields], approvedTenantIds, now)[0]
+  if (!data) return null
+
+  const now = new Date()
+  const approvedTenantIds = await listApprovedTenantIdsForCurrentCycle({ organizationId, tenantIds: [data.id], now })
+  return applyComputedPaymentStatus([data as unknown as TenantWithPaymentFields], approvedTenantIds, now)[0]
 }
 
 export async function updateTenant(organizationId: string, tenantId: string, patch: Record<string, unknown>) {
-  const { data, error } = await supabaseAdmin
-    .from('tenants')
-    .update(patch)
-    .eq('id', tenantId)
-    .eq('organization_id', organizationId)
-    .select('*')
-    .maybeSingle()
-
-  throwIfError(error, 'Failed to update tenant')
-  return data
+  return prisma.tenants.update({ where: { id: tenantId }, data: patch })
 }
 
 export async function deleteTenant(organizationId: string, tenantId: string) {
-  const { error, count } = await supabaseAdmin
-    .from('tenants')
-    .delete({ count: 'exact' })
-    .eq('id', tenantId)
-    .eq('organization_id', organizationId)
-
-  throwIfError(error, 'Failed to delete tenant')
-  return count ?? 0
+  const existing = await prisma.tenants.findFirst({ where: { id: tenantId, organization_id: organizationId }, select: { id: true } })
+  if (!existing) return 0
+  await prisma.tenants.delete({ where: { id: tenantId } })
+  return 1
 }
 
 export async function getTenantDetailAggregate(organizationId: string, tenantId: string) {
   const tenant = await getTenantForOwner(organizationId, tenantId)
+  if (!tenant) return null
 
-  if (!tenant) {
-    return null
-  }
+  await isTicketSummarizationEnabled(organizationId)
 
-  const aiTicketSummariesEnabled = await isTicketSummarizationEnabled(organizationId)
-  if (aiTicketSummariesEnabled) {
-    // Infrastructure-only hook:
-    // Ticket summarization is intentionally disabled in live flows for now.
-    // Future rollout will add summary payload fields to this aggregate.
-  }
-
-  const [{ data: tickets, error: ticketsError }, { data: reminders, error: remindersError }] = await Promise.all([
-    supabaseAdmin
-      .from('support_tickets')
-      .select('*')
-      .eq('tenant_id', tenantId)
-      .eq('organization_id', organizationId)
-      .order('created_at', { ascending: false }),
-    supabaseAdmin
-      .from('rent_reminders')
-      .select('*')
-      .eq('tenant_id', tenantId)
-      .eq('organization_id', organizationId)
-      .order('scheduled_for', { ascending: false }),
+  const [tickets, reminders] = await Promise.all([
+    prisma.support_tickets.findMany({ where: { tenant_id: tenantId, organization_id: organizationId }, orderBy: { created_at: 'desc' } }),
+    prisma.rent_reminders.findMany({ where: { tenant_id: tenantId, organization_id: organizationId }, orderBy: { scheduled_for: 'desc' } }),
   ])
 
-  throwIfError(ticketsError, 'Failed to load tenant tickets')
-  throwIfError(remindersError, 'Failed to load tenant reminders')
-
-  return {
-    tenant,
-    tickets: tickets ?? [],
-    reminders: reminders ?? [],
-  }
+  return { tenant, tickets, reminders }
 }
 
 export async function listOwnerTickets(organizationId: string) {
-  const { data, error } = await supabaseAdmin
-    .from('support_tickets')
-    .select('*, tenants(id, full_name, tenant_access_id, property_id, properties(id, property_name))')
-    .eq('organization_id', organizationId)
-    .order('created_at', { ascending: false })
-
-  throwIfError(error, 'Failed to list owner tickets')
-  return data ?? []
+  return prisma.support_tickets.findMany({
+    where: { organization_id: organizationId },
+    include: { tenants: { select: { id: true, full_name: true, tenant_access_id: true, property_id: true, properties: { select: { id: true, property_name: true } } } } },
+    orderBy: { created_at: 'desc' },
+  })
 }
 
 export async function updateOwnerTicket(organizationId: string, ticketId: string, status: string) {
-  const { data, error } = await supabaseAdmin
-    .from('support_tickets')
-    .update({ status, updated_at: new Date().toISOString() })
-    .eq('id', ticketId)
-    .eq('organization_id', organizationId)
-    .select('*')
-    .maybeSingle()
-
-  throwIfError(error, 'Failed to update ticket')
-  return data
+  return prisma.support_tickets.update({ where: { id: ticketId }, data: { status, updated_at: new Date() } })
 }
 
 export async function listOwnerNotifications(organizationId: string, ownerId: string) {
-  const { data, error } = await supabaseAdmin
-    .from('owner_notifications')
-    .select('*, tenants(id, full_name, tenant_access_id)')
-    .eq('organization_id', organizationId)
-    .eq('owner_id', ownerId)
-    .order('created_at', { ascending: false })
-
-  throwIfError(error, 'Failed to list notifications')
-  return data ?? []
+  return prisma.owner_notifications.findMany({
+    where: { organization_id: organizationId, owner_id: ownerId },
+    include: { tenants: { select: { id: true, full_name: true, tenant_access_id: true } } },
+    orderBy: { created_at: 'desc' },
+  })
 }
 
 export async function markNotificationRead(organizationId: string, ownerId: string, notificationId: string) {
-  const { data, error } = await supabaseAdmin
-    .from('owner_notifications')
-    .update({ is_read: true })
-    .eq('id', notificationId)
-    .eq('organization_id', organizationId)
-    .eq('owner_id', ownerId)
-    .select('*')
-    .maybeSingle()
-
-  throwIfError(error, 'Failed to update notification')
-  return data
+  return prisma.owner_notifications.update({ where: { id: notificationId }, data: { is_read: true } })
 }
 
 export async function markAllNotificationsRead(organizationId: string, ownerId: string) {
-  const { data, error } = await supabaseAdmin
-    .from('owner_notifications')
-    .update({ is_read: true })
-    .eq('organization_id', organizationId)
-    .eq('owner_id', ownerId)
-    .eq('is_read', false)
-    .select('id')
-
-  throwIfError(error, 'Failed to mark notifications as read')
-  return (data ?? []).length
+  const result = await prisma.owner_notifications.updateMany({ where: { organization_id: organizationId, owner_id: ownerId, is_read: false }, data: { is_read: true } })
+  return result.count
 }
 
 export async function createOwnerNotification(input: {
@@ -509,82 +308,41 @@ export async function createOwnerNotification(input: {
   title: string
   message: string
 }) {
-  const { data, error } = await supabaseAdmin
-    .from('owner_notifications')
-    .insert({
+  return prisma.owner_notifications.create({
+    data: {
       owner_id: input.owner_id,
       tenant_id: input.tenant_id ?? null,
       notification_type: input.notification_type,
       title: input.title,
       message: input.message,
       organization_id: input.organization_id,
-    })
-    .select('*')
-    .single()
-
-  throwIfError(error, 'Failed to create owner notification')
-  return data
+    },
+  })
 }
 
 export async function getOwnerDashboardSummary(organizationId: string, ownerId?: string) {
-  const [activeTenantsResult, ticketsResult, remindersResult, unreadNotificationsResult] = await Promise.all([
-    supabaseAdmin
-      .from('tenants')
-      .select('id, payment_due_day, payment_status')
-      .eq('organization_id', organizationId)
-      .eq('status', 'active'),
-    supabaseAdmin
-      .from('support_tickets')
-      .select('id', { count: 'exact', head: true })
-      .eq('organization_id', organizationId)
-      .in('status', ['open', 'in_progress']),
-    supabaseAdmin
-      .from('rent_reminders')
-      .select('id', { count: 'exact', head: true })
-      .eq('organization_id', organizationId)
-      .eq('status', 'pending'),
-    supabaseAdmin
-      .from('owner_notifications')
-      .select('id', { count: 'exact', head: true })
-      .eq('organization_id', organizationId)
-      .eq('owner_id', ownerId ?? '')
-      .eq('is_read', false),
+  const [activeTenants, openTicketsCount, pendingRemindersCount, unreadNotificationsCount] = await Promise.all([
+    prisma.tenants.findMany({ select: { id: true, payment_due_day: true, payment_status: true }, where: { organization_id: organizationId, status: 'active' } }),
+    prisma.support_tickets.count({ where: { organization_id: organizationId, status: { in: ['open', 'in_progress'] } } }),
+    prisma.rent_reminders.count({ where: { organization_id: organizationId, status: 'pending' } }),
+    prisma.owner_notifications.count({ where: { organization_id: organizationId, owner_id: ownerId ?? '', is_read: false } }),
   ])
 
   let awaitingApprovals = 0
   if (ownerId) {
-    const awaitingApprovalsResult = await supabaseAdmin
-      .from('rent_payment_approvals')
-      .select('id', { count: 'exact', head: true })
-      .eq('organization_id', organizationId)
-      .eq('owner_id', ownerId)
-      .eq('status', 'awaiting_owner_approval')
-    throwIfError(awaitingApprovalsResult.error, 'Failed to count awaiting rent payment approvals')
-    awaitingApprovals = awaitingApprovalsResult.count ?? 0
+    awaitingApprovals = await prisma.rent_payment_approvals.count({ where: { organization_id: organizationId, owner_id: ownerId, status: 'awaiting_owner_approval' } })
   }
 
-  throwIfError(activeTenantsResult.error, 'Failed to load active tenants')
-  throwIfError(ticketsResult.error, 'Failed to count open tickets')
-  throwIfError(remindersResult.error, 'Failed to count pending reminders')
-  throwIfError(unreadNotificationsResult.error, 'Failed to count unread notifications')
-
-  const activeTenants = (activeTenantsResult.data ?? []) as TenantWithPaymentFields[]
   const now = new Date()
-  const approvedTenantIds = await listApprovedTenantIdsForCurrentCycle({
-    organizationId,
-    tenantIds: activeTenants.map((tenant) => tenant.id),
-    now,
-  })
-  const overdueCount = applyComputedPaymentStatus(activeTenants, approvedTenantIds, now).filter(
-    (tenant) => tenant.payment_status === 'overdue',
-  ).length
+  const approvedTenantIds = await listApprovedTenantIdsForCurrentCycle({ organizationId, tenantIds: activeTenants.map((t) => t.id), now })
+  const overdueCount = applyComputedPaymentStatus(activeTenants as unknown as TenantWithPaymentFields[], approvedTenantIds, now).filter((t) => t.payment_status === 'overdue').length
 
   return {
     active_tenants: activeTenants.length,
-    open_tickets: ticketsResult.count ?? 0,
+    open_tickets: openTicketsCount,
     overdue_rent: overdueCount,
-    reminders_pending: remindersResult.count ?? 0,
-    unread_notifications: unreadNotificationsResult.count ?? 0,
+    reminders_pending: pendingRemindersCount,
+    unread_notifications: unreadNotificationsCount,
     awaiting_approvals: awaitingApprovals,
   }
 }

@@ -1,7 +1,5 @@
-import type { PostgrestError } from '@supabase/supabase-js'
-
-import { AppError } from '../../lib/errors.js'
-import { supabaseAdmin } from '../../lib/supabase.js'
+import { prisma } from '../../lib/db.js'
+import { Prisma } from '@prisma/client'
 
 type IntegrationEventStatus = 'received' | 'processing' | 'processed' | 'failed'
 
@@ -20,14 +18,20 @@ type IntegrationEventRow = {
   updated_at: string
 }
 
-const integrationEventSelect =
-  'id, organization_id, provider, event_type, dedupe_key, payload, status, last_error, received_at, processed_at, created_at, updated_at'
-
-function throwIntegrationEventError(error: PostgrestError | null, message: string) {
-  if (error) {
-    throw new AppError(message, 500, error.message)
-  }
-}
+const integrationEventSelect = {
+  id: true,
+  organization_id: true,
+  provider: true,
+  event_type: true,
+  dedupe_key: true,
+  payload: true,
+  status: true,
+  last_error: true,
+  received_at: true,
+  processed_at: true,
+  created_at: true,
+  updated_at: true,
+} satisfies Prisma.integration_eventsSelect
 
 export async function recordIntegrationEvent(input: {
   organizationId?: string | null
@@ -40,45 +44,37 @@ export async function recordIntegrationEvent(input: {
   receivedAt?: string
   processedAt?: string | null
 }) {
-  const { data, error } = await supabaseAdmin
-    .from('integration_events')
-    .insert({
-      organization_id: input.organizationId ?? null,
-      provider: input.provider,
-      event_type: input.eventType,
-      dedupe_key: input.dedupeKey ?? null,
-      payload: input.payload ?? {},
-      status: input.status ?? 'received',
-      last_error: input.lastError ?? null,
-      received_at: input.receivedAt ?? new Date().toISOString(),
-      processed_at: input.processedAt ?? null,
+  try {
+    const data = await prisma.integration_events.create({
+      data: {
+        organization_id: input.organizationId ?? null,
+        provider: input.provider,
+        event_type: input.eventType,
+        dedupe_key: input.dedupeKey ?? null,
+        payload: (input.payload ?? {}) as object,
+        status: input.status ?? 'received',
+        last_error: input.lastError ?? null,
+        received_at: input.receivedAt ? new Date(input.receivedAt) : new Date(),
+        processed_at: input.processedAt ? new Date(input.processedAt) : null,
+      },
+      select: integrationEventSelect,
     })
-    .select(integrationEventSelect)
-    .maybeSingle()
-
-  if (!error) {
-    return data as IntegrationEventRow
-  }
-
-  if (error.code === '23505' && input.dedupeKey) {
-    const existing = await getIntegrationEventByDedupeKey(input.dedupeKey)
-    if (existing) {
-      return existing
+    return data as unknown as IntegrationEventRow
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002' && input.dedupeKey) {
+      const existing = await getIntegrationEventByDedupeKey(input.dedupeKey)
+      if (existing) return existing
     }
+    throw err
   }
-
-  throwIntegrationEventError(error, 'Failed to record integration event')
 }
 
 export async function getIntegrationEventByDedupeKey(dedupeKey: string) {
-  const { data, error } = await supabaseAdmin
-    .from('integration_events')
-    .select(integrationEventSelect)
-    .eq('dedupe_key', dedupeKey)
-    .maybeSingle()
-
-  throwIntegrationEventError(error, 'Failed to load integration event')
-  return (data as IntegrationEventRow | null) ?? null
+  const data = await prisma.integration_events.findFirst({
+    select: integrationEventSelect,
+    where: { dedupe_key: dedupeKey },
+  })
+  return (data as unknown as IntegrationEventRow | null) ?? null
 }
 
 export async function updateIntegrationEvent(input: {
@@ -88,18 +84,15 @@ export async function updateIntegrationEvent(input: {
   lastError?: string | null
   processedAt?: string | null
 }) {
-  const { data, error } = await supabaseAdmin
-    .from('integration_events')
-    .update({
-      status: input.status,
-      payload: input.payload,
-      last_error: typeof input.lastError === 'undefined' ? undefined : input.lastError,
-      processed_at: typeof input.processedAt === 'undefined' ? undefined : input.processedAt,
-    })
-    .eq('id', input.id)
-    .select(integrationEventSelect)
-    .maybeSingle()
-
-  throwIntegrationEventError(error, 'Failed to update integration event')
-  return (data as IntegrationEventRow | null) ?? null
+  const data = await prisma.integration_events.update({
+    where: { id: input.id },
+    data: {
+      ...(input.status !== undefined && { status: input.status }),
+      ...(input.payload !== undefined && { payload: input.payload as object }),
+      ...(input.lastError !== undefined && { last_error: input.lastError }),
+      ...(input.processedAt !== undefined && { processed_at: input.processedAt ? new Date(input.processedAt) : null }),
+    },
+    select: integrationEventSelect,
+  })
+  return (data as unknown as IntegrationEventRow | null) ?? null
 }

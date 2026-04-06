@@ -1,7 +1,4 @@
-import type { PostgrestError } from '@supabase/supabase-js'
-
-import { AppError } from '../../lib/errors.js'
-import { supabaseAdmin } from '../../lib/supabase.js'
+import { prisma } from '../../lib/db.js'
 
 export type AutomationTemplateChannel = 'email' | 'whatsapp' | 'in_app'
 
@@ -13,25 +10,15 @@ type MessageTemplateRow = {
   body: string
 }
 
-function throwIfError(error: PostgrestError | null, message: string): void {
-  if (error) {
-    throw new AppError(message, 500, error.message)
-  }
-}
-
 function lookupVariable(context: Record<string, unknown>, path: string): string {
   const resolved = path.split('.').reduce<unknown>((current, segment) => {
     if (current && typeof current === 'object' && segment in (current as Record<string, unknown>)) {
       return (current as Record<string, unknown>)[segment]
     }
-
     return undefined
   }, context)
 
-  if (resolved === null || typeof resolved === 'undefined') {
-    return ''
-  }
-
+  if (resolved === null || typeof resolved === 'undefined') return ''
   return String(resolved)
 }
 
@@ -47,27 +34,22 @@ export async function resolveAutomationMessageTemplate(input: {
   fallbackSubject?: string | null
   variables?: Record<string, unknown>
 }) {
-  let query = supabaseAdmin
-    .from('message_templates')
-    .select('organization_id, template_key, channel, subject, body')
-    .eq('template_key', input.templateKey)
-    .eq('channel', input.channel)
-    .eq('is_active', true)
+  const templates = await prisma.message_templates.findMany({
+    select: { organization_id: true, template_key: true, channel: true, subject: true, body: true },
+    where: {
+      template_key: input.templateKey,
+      channel: input.channel,
+      is_active: true,
+      ...(input.organizationId
+        ? { OR: [{ organization_id: input.organizationId }, { organization_id: null }] }
+        : { organization_id: null }),
+    },
+  })
 
-  if (input.organizationId) {
-    query = query.or(`organization_id.eq.${input.organizationId},organization_id.is.null`)
-  } else {
-    query = query.is('organization_id', null)
-  }
-
-  const { data, error } = await query
-
-  throwIfError(error, 'Failed to resolve automation message template')
-
-  const templates = (data ?? []) as MessageTemplateRow[]
+  const rows = templates as MessageTemplateRow[]
   const selected =
-    templates.find((template) => template.organization_id === (input.organizationId ?? null)) ??
-    templates.find((template) => template.organization_id === null) ??
+    rows.find((t) => t.organization_id === (input.organizationId ?? null)) ??
+    rows.find((t) => t.organization_id === null) ??
     null
 
   const variables = input.variables ?? {}

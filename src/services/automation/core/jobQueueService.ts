@@ -1,7 +1,5 @@
-import type { PostgrestError } from '@supabase/supabase-js'
-
 import { AppError } from '../../../lib/errors.js'
-import { supabaseAdmin } from '../../../lib/supabase.js'
+import { prisma } from '../../../lib/db.js'
 import { buildScheduledAutomationJobs } from '../jobScheduler.js'
 import { isAutomationJobType, type AutomationJobType } from '../jobTypes.js'
 import { getAutomationJobHandler } from './registry.js'
@@ -28,36 +26,30 @@ type ListAutomationJobsInput = {
   organization_id?: string
 }
 
-const automationJobSelect = [
-  'id',
-  'organization_id',
-  'owner_id',
-  'job_type',
-  'handler_key',
-  'trigger_type',
-  'dedupe_key',
-  'payload',
-  'run_at',
-  'next_run_at',
-  'lifecycle_status',
-  'status',
-  'attempts',
-  'retry_count',
-  'max_attempts',
-  'last_error',
-  'last_error_code',
-  'locked_at',
-  'started_at',
-  'finished_at',
-  'processed_at',
-  'source_type',
-  'source_ref',
-].join(', ')
-
-function throwIfError(error: PostgrestError | null, message: string) {
-  if (error) {
-    throw new AppError(message, 500, error.message)
-  }
+const automationJobSelect = {
+  id: true,
+  organization_id: true,
+  owner_id: true,
+  job_type: true,
+  handler_key: true,
+  trigger_type: true,
+  dedupe_key: true,
+  payload: true,
+  run_at: true,
+  next_run_at: true,
+  lifecycle_status: true,
+  status: true,
+  attempts: true,
+  retry_count: true,
+  max_attempts: true,
+  last_error: true,
+  last_error_code: true,
+  locked_at: true,
+  started_at: true,
+  finished_at: true,
+  processed_at: true,
+  source_type: true,
+  source_ref: true,
 }
 
 function assertHandler(jobType: AutomationJobType) {
@@ -71,37 +63,32 @@ function assertHandler(jobType: AutomationJobType) {
 export async function queueAutomationJob(input: QueueAutomationJobInput) {
   assertHandler(input.jobType)
 
-  const { data: existing, error: existingError } = await supabaseAdmin
-    .from('automation_jobs')
-    .select('id, lifecycle_status, status')
-    .eq('dedupe_key', input.dedupeKey)
-    .maybeSingle()
-
-  throwIfError(existingError, 'Failed to check existing automation job')
+  const existing = await prisma.automation_jobs.findFirst({
+    select: { id: true, lifecycle_status: true, status: true },
+    where: { dedupe_key: input.dedupeKey },
+  })
 
   if (existing) {
     return {
       created: false,
-      job_id: existing.id as string,
-      status: ((existing as { lifecycle_status?: string }).lifecycle_status ??
-        (existing as { status?: string }).status ??
-        'queued') as string,
+      job_id: existing.id,
+      status: (existing.lifecycle_status ?? existing.status ?? 'queued') as string,
     }
   }
 
-  const runAt = input.runAt ?? new Date().toISOString()
+  const runAt = input.runAt ? new Date(input.runAt) : new Date()
   const lifecycleStatus = 'queued'
 
-  const { data, error } = await supabaseAdmin
-    .from('automation_jobs')
-    .insert({
+  const data = await prisma.automation_jobs.create({
+    select: { id: true, lifecycle_status: true },
+    data: {
       organization_id: input.organizationId ?? null,
       owner_id: input.ownerId ?? null,
       job_type: input.jobType,
       handler_key: input.jobType,
       trigger_type: input.triggerType ?? 'manual',
       dedupe_key: input.dedupeKey,
-      payload: input.payload ?? {},
+      payload: (input.payload ?? {}) as object,
       run_at: runAt,
       next_run_at: runAt,
       lifecycle_status: lifecycleStatus,
@@ -111,16 +98,13 @@ export async function queueAutomationJob(input: QueueAutomationJobInput) {
       max_attempts: input.maxAttempts ?? 3,
       source_type: input.sourceType ?? null,
       source_ref: input.sourceRef ?? null,
-    })
-    .select('id, lifecycle_status')
-    .single()
-
-  throwIfError(error, 'Failed to queue automation job')
+    },
+  })
 
   return {
     created: true,
-    job_id: data?.id as string,
-    status: (data?.lifecycle_status as string) ?? lifecycleStatus,
+    job_id: data.id,
+    status: (data.lifecycle_status as string) ?? lifecycleStatus,
   }
 }
 
@@ -172,36 +156,22 @@ export async function queueEventAutomationJob(input: {
 }
 
 export async function listAutomationJobs(query: ListAutomationJobsInput) {
-  const from = (query.page - 1) * query.page_size
-  const to = from + query.page_size - 1
+  const skip = (query.page - 1) * query.page_size
 
-  let request = supabaseAdmin
-    .from('automation_jobs')
-    .select(automationJobSelect, { count: 'exact' })
-    .order('created_at', { ascending: false })
-    .range(from, to)
-
+  const where: Record<string, unknown> = {}
   if (query.job_type) {
     if (!isAutomationJobType(query.job_type)) {
       throw new AppError('Invalid automation job type filter', 400)
     }
-
-    request = request.eq('job_type', query.job_type)
+    where.job_type = query.job_type
   }
+  if (query.lifecycle_status) where.lifecycle_status = query.lifecycle_status
+  if (query.organization_id) where.organization_id = query.organization_id
 
-  if (query.lifecycle_status) {
-    request = request.eq('lifecycle_status', query.lifecycle_status)
-  }
+  const [items, total] = await prisma.$transaction([
+    prisma.automation_jobs.findMany({ select: automationJobSelect, where, orderBy: { created_at: 'desc' }, skip, take: query.page_size }),
+    prisma.automation_jobs.count({ where }),
+  ])
 
-  if (query.organization_id) {
-    request = request.eq('organization_id', query.organization_id)
-  }
-
-  const { data, error, count } = await request
-  throwIfError(error, 'Failed to list automation jobs')
-
-  return {
-    items: (data ?? []) as unknown as AutomationJobRecord[],
-    total: count ?? 0,
-  }
+  return { items: items as unknown as AutomationJobRecord[], total }
 }

@@ -323,7 +323,7 @@ export const postTenantTicket = asyncHandler(async (request: Request, response: 
   const vacancySignal = detectVacancyIntentFromTicket({
     subject: parsed.subject,
     message: parsed.message,
-    tenantLeaseEndDate: tenant.lease_end_date,
+    tenantLeaseEndDate: tenant.lease_end_date instanceof Date ? tenant.lease_end_date.toISOString().slice(0, 10) : tenant.lease_end_date,
   })
 
   if (vacancySignal.isVacancyNotice && tenant.property_id) {
@@ -333,10 +333,10 @@ export const postTenantTicket = asyncHandler(async (request: Request, response: 
       propertyId: tenant.property_id,
       tenantId,
       sourceType: 'tenant_notice',
-      expectedVacancyDate: vacancySignal.suggestedExpectedVacancyDate ?? tenant.lease_end_date ?? new Date().toISOString().slice(0, 10),
+      expectedVacancyDate: vacancySignal.suggestedExpectedVacancyDate ?? (tenant.lease_end_date instanceof Date ? tenant.lease_end_date.toISOString().slice(0, 10) : tenant.lease_end_date) ?? new Date().toISOString().slice(0, 10),
       triggerReference: `ticket:${ticket.id}`,
       triggerNotes: `${vacancySignal.reason} Ticket subject: ${parsed.subject}`,
-      vacancyState: tenant.lease_end_date && tenant.lease_end_date <= new Date().toISOString().slice(0, 10) ? 'vacant' : 'pre_vacant',
+      vacancyState: tenant.lease_end_date && (tenant.lease_end_date instanceof Date ? tenant.lease_end_date.toISOString().slice(0, 10) : tenant.lease_end_date) <= new Date().toISOString().slice(0, 10) ? 'vacant' : 'pre_vacant',
     }).catch((error) => {
       console.error('[postTenantTicket] vacancy campaign enqueue failed', {
         ticketId: ticket.id,

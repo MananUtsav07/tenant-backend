@@ -1,7 +1,4 @@
-import type { PostgrestError } from '@supabase/supabase-js'
-
-import { AppError } from '../lib/errors.js'
-import { supabaseAdmin } from '../lib/supabase.js'
+import { prisma } from '../lib/db.js'
 
 export type OwnerNotificationPreferences = {
   id: string
@@ -29,12 +26,6 @@ type OwnerNotificationPreferencePatch = Partial<
   >
 >
 
-function throwIfError(error: PostgrestError | null, message: string): void {
-  if (error) {
-    throw new AppError(message, 500, error.message)
-  }
-}
-
 function defaultPreferences(ownerId: string, organizationId: string): OwnerNotificationPreferences {
   const now = new Date().toISOString()
 
@@ -54,19 +45,11 @@ function defaultPreferences(ownerId: string, organizationId: string): OwnerNotif
 }
 
 export async function getOwnerNotificationPreferences(ownerId: string, organizationId: string): Promise<OwnerNotificationPreferences> {
-  const { data, error } = await supabaseAdmin
-    .from('owner_notification_preferences')
-    .select('*')
-    .eq('owner_id', ownerId)
-    .eq('organization_id', organizationId)
-    .maybeSingle()
-
-  throwIfError(error, 'Failed to load owner notification preferences')
-  if (!data) {
-    return defaultPreferences(ownerId, organizationId)
-  }
-
-  return data as OwnerNotificationPreferences
+  const data = await prisma.owner_notification_preferences.findFirst({
+    where: { owner_id: ownerId, organization_id: organizationId },
+  })
+  if (!data) return defaultPreferences(ownerId, organizationId)
+  return data as unknown as OwnerNotificationPreferences
 }
 
 export async function updateOwnerNotificationPreferences(
@@ -74,19 +57,10 @@ export async function updateOwnerNotificationPreferences(
   organizationId: string,
   patch: OwnerNotificationPreferencePatch,
 ): Promise<OwnerNotificationPreferences> {
-  const { data, error } = await supabaseAdmin
-    .from('owner_notification_preferences')
-    .upsert(
-      {
-        owner_id: ownerId,
-        organization_id: organizationId,
-        ...patch,
-      },
-      { onConflict: 'organization_id,owner_id' },
-    )
-    .select('*')
-    .single()
-
-  throwIfError(error, 'Failed to update owner notification preferences')
-  return data as OwnerNotificationPreferences
+  const data = await prisma.owner_notification_preferences.upsert({
+    where: { organization_id_owner_id: { organization_id: organizationId, owner_id: ownerId } },
+    create: { owner_id: ownerId, organization_id: organizationId, ...patch },
+    update: { ...patch },
+  })
+  return data as unknown as OwnerNotificationPreferences
 }

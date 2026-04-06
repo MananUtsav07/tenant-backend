@@ -1,8 +1,5 @@
-import type { PostgrestError } from '@supabase/supabase-js'
-
 import { env } from '../config/env.js'
-import { AppError } from '../lib/errors.js'
-import { supabaseAdmin } from '../lib/supabase.js'
+import { prisma } from '../lib/db.js'
 import { recordAutomationError } from './automation/core/runLogger.js'
 import { resolveAutomationMessageTemplate } from './automation/messageTemplateService.js'
 import { deliverOwnerAutomationMessage } from './automation/providers/messageProvider.js'
@@ -28,27 +25,9 @@ type ComplianceRow = {
   alert_90_sent_at: string | null
   alert_60_sent_at: string | null
   alert_30_sent_at: string | null
-  owners?:
-    | {
-        email: string
-        full_name: string | null
-        company_name: string | null
-        support_email: string | null
-        support_whatsapp?: string | null
-      }
-    | null
-  properties?:
-    | {
-        property_name: string | null
-        unit_number: string | null
-      }
-    | null
-  tenants?:
-    | {
-        full_name: string | null
-        tenant_access_id: string | null
-      }
-    | null
+  owners?: { email: string; full_name: string | null; company_name: string | null; support_email: string | null; support_whatsapp?: string | null } | null
+  properties?: { property_name: string | null; unit_number: string | null } | null
+  tenants?: { full_name: string | null; tenant_access_id: string | null } | null
 }
 
 type ComplianceAlertEventRow = {
@@ -73,18 +52,8 @@ type ComplianceAlertEventRow = {
   draft_body: string | null
   sent_at: string
   created_at: string
-  properties?:
-    | {
-        property_name: string | null
-        unit_number: string | null
-      }
-    | null
-  tenants?:
-    | {
-        full_name: string | null
-        tenant_access_id: string | null
-      }
-    | null
+  properties?: { property_name: string | null; unit_number: string | null } | null
+  tenants?: { full_name: string | null; tenant_access_id: string | null } | null
 }
 
 export type ComplianceUpcomingItem = {
@@ -110,22 +79,10 @@ export type ComplianceUpcomingItem = {
   draft_title: string | null
 }
 
-function throwIfError(error: PostgrestError | null, message: string): void {
-  if (error) {
-    throw new AppError(message, 500, error.message)
-  }
-}
-
 function parseDateOnly(value: string | null | undefined): Date | null {
-  if (!value) {
-    return null
-  }
-
+  if (!value) return null
   const date = new Date(`${value}T00:00:00.000Z`)
-  if (Number.isNaN(date.getTime())) {
-    return null
-  }
-
+  if (Number.isNaN(date.getTime())) return null
   return date
 }
 
@@ -139,15 +96,9 @@ function daysUntil(target: Date, now: Date): number {
 }
 
 function thresholdColumn(threshold: ComplianceThreshold): 'alert_120_sent_at' | 'alert_90_sent_at' | 'alert_60_sent_at' | 'alert_30_sent_at' {
-  if (threshold === 120) {
-    return 'alert_120_sent_at'
-  }
-  if (threshold === 90) {
-    return 'alert_90_sent_at'
-  }
-  if (threshold === 60) {
-    return 'alert_60_sent_at'
-  }
+  if (threshold === 120) return 'alert_120_sent_at'
+  if (threshold === 90) return 'alert_90_sent_at'
+  if (threshold === 60) return 'alert_60_sent_at'
   return 'alert_30_sent_at'
 }
 
@@ -156,19 +107,13 @@ function ownerDashboardUrl() {
 }
 
 function ownerDisplayName(owner: ComplianceRow['owners']): string {
-  if (!owner) {
-    return 'Owner'
-  }
-
+  if (!owner) return 'Owner'
   return owner.full_name || owner.company_name || owner.email
 }
 
 function formatDateLabel(value: string | null): string {
   const parsed = parseDateOnly(value)
-  if (!parsed) {
-    return 'Not set'
-  }
-
+  if (!parsed) return 'Not set'
   return new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium' }).format(parsed)
 }
 
@@ -177,12 +122,8 @@ function unitLabel(value: string | null | undefined) {
 }
 
 function triggerLabel(dateType: ComplianceDateType) {
-  if (dateType === 'ejari_expiry') {
-    return 'Ejari expiry'
-  }
-  if (dateType === 'contract_end') {
-    return 'Contract end'
-  }
+  if (dateType === 'ejari_expiry') return 'Ejari expiry'
+  if (dateType === 'contract_end') return 'Contract end'
   return 'RERA notice date'
 }
 
@@ -192,29 +133,13 @@ function relevantDateForType(row: ComplianceRow, dateType: ComplianceDateType) {
 
 function nextThresholdForDays(daysRemaining: number, sentThresholds: Set<ComplianceThreshold>) {
   const eligibleThresholds = thresholds.filter((threshold) => daysRemaining <= threshold && !sentThresholds.has(threshold))
-  if (eligibleThresholds.length === 0) {
-    return null
-  }
-
+  if (eligibleThresholds.length === 0) return null
   return Math.min(...eligibleThresholds) as ComplianceThreshold
 }
 
-function buildDraftScaffold(input: {
-  row: ComplianceRow
-  dateType: ComplianceDateType
-  threshold: ComplianceThreshold
-  daysRemaining: number
-}) {
+function buildDraftScaffold(input: { row: ComplianceRow; dateType: ComplianceDateType; threshold: ComplianceThreshold; daysRemaining: number }) {
   if (input.threshold !== 30) {
-    return {
-      nextAction: input.dateType === 'ejari_expiry'
-        ? 'Review renewal preparation and confirm whether tenant renewal is proceeding.'
-        : 'Review renewal or notice planning with the property team.',
-      legalActionRecommended: false,
-      draftTitle: null,
-      draftBody: null,
-      notificationType: 'compliance_alert' as const,
-    }
+    return { nextAction: input.dateType === 'ejari_expiry' ? 'Review renewal preparation and confirm whether tenant renewal is proceeding.' : 'Review renewal or notice planning with the property team.', legalActionRecommended: false, draftTitle: null, draftBody: null, notificationType: 'compliance_alert' as const }
   }
 
   const propertyName = input.row.properties?.property_name ?? 'your property'
@@ -223,148 +148,105 @@ function buildDraftScaffold(input: {
   const trigger = triggerLabel(input.dateType)
 
   if (input.dateType === 'ejari_expiry') {
-    return {
-      nextAction: 'Escalate Ejari renewal immediately and prepare fallback legal review if renewal is not progressing.',
-      legalActionRecommended: true,
-      draftTitle: `Renewal escalation note for ${propertyName}`,
-      draftBody: `Review ${trigger.toLowerCase()} for ${propertyName} ${unit}. ${tenantName} is ${input.daysRemaining} days away from the milestone. Confirm renewal status, chase missing documents, and prepare legal escalation if renewal will not complete in time.`,
-      notificationType: 'compliance_alert_urgent' as const,
-    }
+    return { nextAction: 'Escalate Ejari renewal immediately and prepare fallback legal review if renewal is not progressing.', legalActionRecommended: true, draftTitle: `Renewal escalation note for ${propertyName}`, draftBody: `Review ${trigger.toLowerCase()} for ${propertyName} ${unit}. ${tenantName} is ${input.daysRemaining} days away from the milestone. Confirm renewal status, chase missing documents, and prepare legal escalation if renewal will not complete in time.`, notificationType: 'compliance_alert_urgent' as const }
   }
 
-  return {
-    nextAction: 'Prepare the Form 12 / legal action review package for owner approval.',
-    legalActionRecommended: true,
-    draftTitle: `Form 12 preparation note for ${propertyName}`,
-    draftBody: `Prepare a Form 12 review package for ${propertyName} ${unit}. ${tenantName} is ${input.daysRemaining} days away from ${trigger.toLowerCase()}. Verify notice grounds, supporting facts, and owner approval steps before initiating any legal action.`,
-    notificationType: 'compliance_alert_urgent' as const,
-  }
+  return { nextAction: 'Prepare the Form 12 / legal action review package for owner approval.', legalActionRecommended: true, draftTitle: `Form 12 preparation note for ${propertyName}`, draftBody: `Prepare a Form 12 review package for ${propertyName} ${unit}. ${tenantName} is ${input.daysRemaining} days away from ${trigger.toLowerCase()}. Verify notice grounds, supporting facts, and owner approval steps before initiating any legal action.`, notificationType: 'compliance_alert_urgent' as const }
 }
 
 async function ownerComplianceSettingsMap(ownerIds: string[]) {
-  if (ownerIds.length === 0) {
-    return new Map<string, boolean>()
-  }
+  if (ownerIds.length === 0) return new Map<string, boolean>()
 
-  const { data, error } = await supabaseAdmin
-    .from('owner_automation_settings')
-    .select('owner_id, compliance_alerts_enabled')
-    .in('owner_id', ownerIds)
-
-  throwIfError(error, 'Failed to load owner automation settings')
+  const data = await prisma.owner_automation_settings.findMany({
+    select: { owner_id: true, compliance_alerts_enabled: true },
+    where: { owner_id: { in: ownerIds } },
+  })
 
   const map = new Map<string, boolean>()
-  for (const row of data ?? []) {
-    map.set(row.owner_id as string, Boolean(row.compliance_alerts_enabled))
+  for (const row of data) {
+    map.set(row.owner_id, Boolean(row.compliance_alerts_enabled))
   }
-
   return map
 }
 
-async function loadComplianceRows(filter?: { organizationId?: string; ownerId?: string }) {
-  let query = supabaseAdmin
-    .from('legal_dates')
-    .select(
-      'id, organization_id, owner_id, property_id, tenant_id, ejari_expiry, contract_end, rera_notice_date, form12_sent, alert_120_sent_at, alert_90_sent_at, alert_60_sent_at, alert_30_sent_at, owners(email, full_name, company_name, support_email, support_whatsapp), properties(property_name, unit_number), tenants(full_name, tenant_access_id)',
-    )
-
-  if (filter?.organizationId) {
-    query = query.eq('organization_id', filter.organizationId)
-  }
-
-  if (filter?.ownerId) {
-    query = query.eq('owner_id', filter.ownerId)
-  }
-
-  const { data, error } = await query
-  throwIfError(error, 'Failed to load legal compliance records')
-
-  return (data ?? []).map((row) => {
-    const normalized = row as Record<string, unknown>
-
-    const ownersValue = normalized.owners
-    const propertiesValue = normalized.properties
-    const tenantsValue = normalized.tenants
-
-    return {
-      id: String(normalized.id),
-      organization_id: String(normalized.organization_id),
-      owner_id: String(normalized.owner_id),
-      property_id: String(normalized.property_id),
-      tenant_id: (normalized.tenant_id as string | null | undefined) ?? null,
-      ejari_expiry: (normalized.ejari_expiry as string | null | undefined) ?? null,
-      contract_end: (normalized.contract_end as string | null | undefined) ?? null,
-      rera_notice_date: (normalized.rera_notice_date as string | null | undefined) ?? null,
-      form12_sent: Boolean(normalized.form12_sent),
-      alert_120_sent_at: (normalized.alert_120_sent_at as string | null | undefined) ?? null,
-      alert_90_sent_at: (normalized.alert_90_sent_at as string | null | undefined) ?? null,
-      alert_60_sent_at: (normalized.alert_60_sent_at as string | null | undefined) ?? null,
-      alert_30_sent_at: (normalized.alert_30_sent_at as string | null | undefined) ?? null,
-      owners: Array.isArray(ownersValue) ? ((ownersValue[0] as ComplianceRow['owners']) ?? null) : ((ownersValue as ComplianceRow['owners']) ?? null),
-      properties: Array.isArray(propertiesValue)
-        ? ((propertiesValue[0] as ComplianceRow['properties']) ?? null)
-        : ((propertiesValue as ComplianceRow['properties']) ?? null),
-      tenants: Array.isArray(tenantsValue) ? ((tenantsValue[0] as ComplianceRow['tenants']) ?? null) : ((tenantsValue as ComplianceRow['tenants']) ?? null),
-    } satisfies ComplianceRow
-  })
+function normalizeRelation<T>(value: unknown): T | null {
+  if (!value) return null
+  if (Array.isArray(value)) return (value[0] as T) ?? null
+  return value as T
 }
 
-async function loadComplianceAlertEvents(filter?: { organizationId?: string; ownerId?: string }) {
-  let query = supabaseAdmin
-    .from('compliance_alert_events')
-    .select(
-      'id, legal_date_id, organization_id, owner_id, property_id, tenant_id, trigger_date_type, threshold_days, relevant_date, days_remaining, notification_type, message_subject, message_preview, delivery_channels, next_action, legal_action_recommended, legal_action_initiated, draft_title, draft_body, sent_at, created_at, properties(property_name, unit_number), tenants(full_name, tenant_access_id)',
-    )
-    .order('sent_at', { ascending: false })
+function serializeDateField(value: Date | string | null | undefined): string | null {
+  if (!value) return null
+  if (value instanceof Date) return value.toISOString().slice(0, 10)
+  return String(value)
+}
 
-  if (filter?.organizationId) {
-    query = query.eq('organization_id', filter.organizationId)
-  }
+async function loadComplianceRows(filter?: { organizationId?: string; ownerId?: string }): Promise<ComplianceRow[]> {
+  const where: Record<string, unknown> = {}
+  if (filter?.organizationId) where.organization_id = filter.organizationId
+  if (filter?.ownerId) where.owner_id = filter.ownerId
 
-  if (filter?.ownerId) {
-    query = query.eq('owner_id', filter.ownerId)
-  }
-
-  const { data, error } = await query
-  throwIfError(error, 'Failed to load compliance alert events')
-
-  return (data ?? []).map((row) => {
-    const normalized = row as Record<string, unknown>
-    const propertiesValue = normalized.properties
-    const tenantsValue = normalized.tenants
-
-    return {
-      id: String(normalized.id),
-      legal_date_id: String(normalized.legal_date_id),
-      organization_id: String(normalized.organization_id),
-      owner_id: String(normalized.owner_id),
-      property_id: String(normalized.property_id),
-      tenant_id: (normalized.tenant_id as string | null | undefined) ?? null,
-      trigger_date_type: normalized.trigger_date_type as ComplianceDateType,
-      threshold_days: normalized.threshold_days as ComplianceThreshold,
-      relevant_date: String(normalized.relevant_date),
-      days_remaining: Number(normalized.days_remaining),
-      notification_type: normalized.notification_type as 'compliance_alert' | 'compliance_alert_urgent',
-      message_subject: (normalized.message_subject as string | null | undefined) ?? null,
-      message_preview: (normalized.message_preview as string | null | undefined) ?? null,
-      delivery_channels: Array.isArray(normalized.delivery_channels)
-        ? (normalized.delivery_channels as ComplianceAlertEventRow['delivery_channels'])
-        : [],
-      next_action: (normalized.next_action as string | null | undefined) ?? null,
-      legal_action_recommended: Boolean(normalized.legal_action_recommended),
-      legal_action_initiated: Boolean(normalized.legal_action_initiated),
-      draft_title: (normalized.draft_title as string | null | undefined) ?? null,
-      draft_body: (normalized.draft_body as string | null | undefined) ?? null,
-      sent_at: String(normalized.sent_at),
-      created_at: String(normalized.created_at),
-      properties: Array.isArray(propertiesValue)
-        ? ((propertiesValue[0] as ComplianceAlertEventRow['properties']) ?? null)
-        : ((propertiesValue as ComplianceAlertEventRow['properties']) ?? null),
-      tenants: Array.isArray(tenantsValue)
-        ? ((tenantsValue[0] as ComplianceAlertEventRow['tenants']) ?? null)
-        : ((tenantsValue as ComplianceAlertEventRow['tenants']) ?? null),
-    } satisfies ComplianceAlertEventRow
+  const data = await prisma.legal_dates.findMany({
+    select: { id: true, organization_id: true, owner_id: true, property_id: true, tenant_id: true, ejari_expiry: true, contract_end: true, rera_notice_date: true, form12_sent: true, alert_120_sent_at: true, alert_90_sent_at: true, alert_60_sent_at: true, alert_30_sent_at: true, owners: { select: { email: true, full_name: true, company_name: true, support_email: true, support_whatsapp: true } }, properties: { select: { property_name: true, unit_number: true } }, tenants: { select: { full_name: true, tenant_access_id: true } } },
+    where,
   })
+
+  return data.map((row) => ({
+    id: row.id,
+    organization_id: row.organization_id,
+    owner_id: row.owner_id ?? '',
+    property_id: row.property_id ?? '',
+    tenant_id: row.tenant_id,
+    ejari_expiry: serializeDateField(row.ejari_expiry as Date | string | null),
+    contract_end: serializeDateField(row.contract_end as Date | string | null),
+    rera_notice_date: serializeDateField(row.rera_notice_date as Date | string | null),
+    form12_sent: Boolean(row.form12_sent),
+    alert_120_sent_at: row.alert_120_sent_at instanceof Date ? row.alert_120_sent_at.toISOString() : (row.alert_120_sent_at as string | null),
+    alert_90_sent_at: row.alert_90_sent_at instanceof Date ? row.alert_90_sent_at.toISOString() : (row.alert_90_sent_at as string | null),
+    alert_60_sent_at: row.alert_60_sent_at instanceof Date ? row.alert_60_sent_at.toISOString() : (row.alert_60_sent_at as string | null),
+    alert_30_sent_at: row.alert_30_sent_at instanceof Date ? row.alert_30_sent_at.toISOString() : (row.alert_30_sent_at as string | null),
+    owners: normalizeRelation<ComplianceRow['owners']>(row.owners),
+    properties: normalizeRelation<ComplianceRow['properties']>(row.properties),
+    tenants: normalizeRelation<ComplianceRow['tenants']>(row.tenants),
+  }))
+}
+
+async function loadComplianceAlertEvents(filter?: { organizationId?: string; ownerId?: string }): Promise<ComplianceAlertEventRow[]> {
+  const where: Record<string, unknown> = {}
+  if (filter?.organizationId) where.organization_id = filter.organizationId
+  if (filter?.ownerId) where.owner_id = filter.ownerId
+
+  const data = await prisma.compliance_alert_events.findMany({
+    select: { id: true, legal_date_id: true, organization_id: true, owner_id: true, property_id: true, tenant_id: true, trigger_date_type: true, threshold_days: true, relevant_date: true, days_remaining: true, notification_type: true, message_subject: true, message_preview: true, delivery_channels: true, next_action: true, legal_action_recommended: true, legal_action_initiated: true, draft_title: true, draft_body: true, sent_at: true, created_at: true, properties: { select: { property_name: true, unit_number: true } }, tenants: { select: { full_name: true, tenant_access_id: true } } },
+    where,
+    orderBy: { sent_at: 'desc' },
+  })
+
+  return data.map((row) => ({
+    id: row.id,
+    legal_date_id: row.legal_date_id ?? '',
+    organization_id: row.organization_id,
+    owner_id: row.owner_id ?? '',
+    property_id: row.property_id ?? '',
+    tenant_id: row.tenant_id,
+    trigger_date_type: row.trigger_date_type as ComplianceDateType,
+    threshold_days: Number(row.threshold_days) as ComplianceThreshold,
+    relevant_date: serializeDateField(row.relevant_date as Date | string | null) ?? '',
+    days_remaining: Number(row.days_remaining),
+    notification_type: row.notification_type as 'compliance_alert' | 'compliance_alert_urgent',
+    message_subject: row.message_subject,
+    message_preview: row.message_preview,
+    delivery_channels: Array.isArray(row.delivery_channels) ? row.delivery_channels as ComplianceAlertEventRow['delivery_channels'] : [],
+    next_action: row.next_action,
+    legal_action_recommended: Boolean(row.legal_action_recommended),
+    legal_action_initiated: Boolean(row.legal_action_initiated),
+    draft_title: row.draft_title,
+    draft_body: row.draft_body,
+    sent_at: row.sent_at instanceof Date ? row.sent_at.toISOString() : String(row.sent_at),
+    created_at: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
+    properties: normalizeRelation<ComplianceAlertEventRow['properties']>(row.properties),
+    tenants: normalizeRelation<ComplianceAlertEventRow['tenants']>(row.tenants),
+  }))
 }
 
 function buildSentThresholdMap(events: ComplianceAlertEventRow[]) {
@@ -378,97 +260,27 @@ function buildSentThresholdMap(events: ComplianceAlertEventRow[]) {
   return sentMap
 }
 
-function buildTemplateVariables(input: {
-  row: ComplianceRow
-  dateType: ComplianceDateType
-  threshold: ComplianceThreshold
-  daysRemaining: number
-  draftTitle: string | null
-  recommendedAction: string
-}) {
+function buildTemplateVariables(input: { row: ComplianceRow; dateType: ComplianceDateType; threshold: ComplianceThreshold; daysRemaining: number; draftTitle: string | null; recommendedAction: string }) {
   const relevantDate = relevantDateForType(input.row, input.dateType)
-  return {
-    ownerName: ownerDisplayName(input.row.owners),
-    propertyName: input.row.properties?.property_name ?? 'Property not provided',
-    unitNumber: input.row.properties?.unit_number ?? 'Not provided',
-    unitLabel: unitLabel(input.row.properties?.unit_number),
-    tenantName: input.row.tenants?.full_name ?? 'Not provided',
-    tenantAccessId: input.row.tenants?.tenant_access_id ?? 'Not provided',
-    triggerType: input.dateType,
-    triggerLabel: triggerLabel(input.dateType),
-    threshold: input.threshold,
-    daysRemaining: input.daysRemaining,
-    relevantDate,
-    relevantDateLabel: formatDateLabel(relevantDate),
-    ejariExpiry: formatDateLabel(input.row.ejari_expiry),
-    contractEnd: formatDateLabel(input.row.contract_end),
-    reraNoticeDate: formatDateLabel(input.row.rera_notice_date),
-    recommendedAction: input.recommendedAction,
-    draftTitle: input.draftTitle ?? 'No draft prepared',
-  }
+  return { ownerName: ownerDisplayName(input.row.owners), propertyName: input.row.properties?.property_name ?? 'Property not provided', unitNumber: input.row.properties?.unit_number ?? 'Not provided', unitLabel: unitLabel(input.row.properties?.unit_number), tenantName: input.row.tenants?.full_name ?? 'Not provided', tenantAccessId: input.row.tenants?.tenant_access_id ?? 'Not provided', triggerType: input.dateType, triggerLabel: triggerLabel(input.dateType), threshold: input.threshold, daysRemaining: input.daysRemaining, relevantDate, relevantDateLabel: formatDateLabel(relevantDate), ejariExpiry: formatDateLabel(input.row.ejari_expiry), contractEnd: formatDateLabel(input.row.contract_end), reraNoticeDate: formatDateLabel(input.row.rera_notice_date), recommendedAction: input.recommendedAction, draftTitle: input.draftTitle ?? 'No draft prepared' }
 }
 
-async function createComplianceOwnerNotification(input: {
-  row: ComplianceRow
-  dateType: ComplianceDateType
-  threshold: ComplianceThreshold
-  daysRemaining: number
-  recommendedAction: string
-  notificationType: 'compliance_alert' | 'compliance_alert_urgent'
-  templateVariables: Record<string, unknown>
-}) {
-  const fallbackTitle =
-    input.threshold === 30
-      ? `Urgent ${triggerLabel(input.dateType)} action in ${input.daysRemaining} days`
-      : `${triggerLabel(input.dateType)} in ${input.daysRemaining} days`
-
+async function createComplianceOwnerNotification(input: { row: ComplianceRow; dateType: ComplianceDateType; threshold: ComplianceThreshold; daysRemaining: number; recommendedAction: string; notificationType: 'compliance_alert' | 'compliance_alert_urgent'; templateVariables: Record<string, unknown> }) {
+  const fallbackTitle = input.threshold === 30 ? `Urgent ${triggerLabel(input.dateType)} action in ${input.daysRemaining} days` : `${triggerLabel(input.dateType)} in ${input.daysRemaining} days`
   const fallbackBody = `${input.row.properties?.property_name ?? 'Property'} ${unitLabel(input.row.properties?.unit_number)} requires attention. ${triggerLabel(input.dateType)} is due on ${formatDateLabel(relevantDateForType(input.row, input.dateType))}. Next action: ${input.recommendedAction}`
 
-  const rendered = await resolveAutomationMessageTemplate({
-    organizationId: input.row.organization_id,
-    templateKey: input.notificationType,
-    channel: 'in_app',
-    fallbackSubject: fallbackTitle,
-    fallbackBody,
-    variables: input.templateVariables,
-  })
+  const rendered = await resolveAutomationMessageTemplate({ organizationId: input.row.organization_id, templateKey: input.notificationType, channel: 'in_app', fallbackSubject: fallbackTitle, fallbackBody, variables: input.templateVariables })
 
-  await createOwnerNotification({
-    organization_id: input.row.organization_id,
-    owner_id: input.row.owner_id,
-    tenant_id: input.row.tenant_id,
-    notification_type: input.notificationType,
-    title: rendered.subject ?? fallbackTitle,
-    message: rendered.body,
-  })
+  await createOwnerNotification({ organization_id: input.row.organization_id, owner_id: input.row.owner_id, tenant_id: input.row.tenant_id, notification_type: input.notificationType, title: rendered.subject ?? fallbackTitle, message: rendered.body })
 
-  return {
-    title: rendered.subject ?? fallbackTitle,
-    message: rendered.body,
-  }
+  return { title: rendered.subject ?? fallbackTitle, message: rendered.body }
 }
 
-async function recordComplianceAlertEvent(input: {
-  row: ComplianceRow
-  dateType: ComplianceDateType
-  threshold: ComplianceThreshold
-  daysRemaining: number
-  notificationType: 'compliance_alert' | 'compliance_alert_urgent'
-  title: string
-  preview: string
-  nextAction: string
-  legalActionRecommended: boolean
-  legalActionInitiated: boolean
-  draftTitle: string | null
-  draftBody: string | null
-  draftPayload: Record<string, unknown>
-  automationJobId?: string | null
-  deliveryChannels: Array<{ channel: string; status: string; reason?: string }>
-  sentAt: string
-}) {
-  const { data, error } = await supabaseAdmin
-    .from('compliance_alert_events')
-    .insert({
+async function recordComplianceAlertEvent(input: { row: ComplianceRow; dateType: ComplianceDateType; threshold: ComplianceThreshold; daysRemaining: number; notificationType: 'compliance_alert' | 'compliance_alert_urgent'; title: string; preview: string; nextAction: string; legalActionRecommended: boolean; legalActionInitiated: boolean; draftTitle: string | null; draftBody: string | null; draftPayload: Record<string, unknown>; automationJobId?: string | null; deliveryChannels: Array<{ channel: string; status: string; reason?: string }>; sentAt: string }) {
+  const relevantDate = relevantDateForType(input.row, input.dateType)
+  const row = await prisma.compliance_alert_events.create({
+    select: { id: true },
+    data: {
       legal_date_id: input.row.id,
       organization_id: input.row.organization_id,
       owner_id: input.row.owner_id,
@@ -477,7 +289,7 @@ async function recordComplianceAlertEvent(input: {
       automation_job_id: input.automationJobId ?? null,
       trigger_date_type: input.dateType,
       threshold_days: input.threshold,
-      relevant_date: relevantDateForType(input.row, input.dateType),
+      relevant_date: relevantDate ? new Date(relevantDate) : new Date(),
       days_remaining: input.daysRemaining,
       notification_type: input.notificationType,
       message_subject: input.title,
@@ -488,68 +300,26 @@ async function recordComplianceAlertEvent(input: {
       legal_action_initiated: input.legalActionInitiated,
       draft_title: input.draftTitle,
       draft_body: input.draftBody,
-      draft_payload: input.draftPayload,
-      sent_at: input.sentAt,
-    })
-    .select('id')
-    .single()
-
-  throwIfError(error, 'Failed to record compliance alert event')
-  return String(data?.id)
+      draft_payload: input.draftPayload as object,
+      sent_at: new Date(input.sentAt),
+    },
+  })
+  return row.id
 }
 
 async function markLegacyThresholdSent(row: ComplianceRow, threshold: ComplianceThreshold, sentAt: string) {
-  const { error } = await supabaseAdmin
-    .from('legal_dates')
-    .update({
-      [thresholdColumn(threshold)]: sentAt,
-    })
-    .eq('id', row.id)
-    .eq('organization_id', row.organization_id)
-
-  throwIfError(error, 'Failed to update legacy compliance threshold marker')
+  const col = thresholdColumn(threshold)
+  await prisma.legal_dates.update({ where: { id: row.id }, data: { [col]: new Date(sentAt) } })
 }
 
-async function logComplianceRowFailure(input: {
-  jobId?: string | null
-  row: ComplianceRow
-  dateType: ComplianceDateType
-  threshold: ComplianceThreshold
-  daysRemaining: number
-  errorMessage: string
-}) {
-  if (!input.jobId) {
-    return
-  }
-
-  await recordAutomationError({
-    jobId: input.jobId,
-    organizationId: input.row.organization_id,
-    ownerId: input.row.owner_id,
-    flowName: 'compliance_scan',
-    errorMessage: input.errorMessage,
-    context: {
-      legal_date_id: input.row.id,
-      trigger_date_type: input.dateType,
-      threshold: input.threshold,
-      days_remaining: input.daysRemaining,
-    },
-  })
+async function logComplianceRowFailure(input: { jobId?: string | null; row: ComplianceRow; dateType: ComplianceDateType; threshold: ComplianceThreshold; daysRemaining: number; errorMessage: string }) {
+  if (!input.jobId) return
+  await recordAutomationError({ jobId: input.jobId, organizationId: input.row.organization_id, ownerId: input.row.owner_id, flowName: 'compliance_scan', errorMessage: input.errorMessage, context: { legal_date_id: input.row.id, trigger_date_type: input.dateType, threshold: input.threshold, days_remaining: input.daysRemaining } })
 }
 
 export async function attachComplianceAlertEventsToRun(eventIds: string[], runId: string) {
-  if (eventIds.length === 0) {
-    return
-  }
-
-  const { error } = await supabaseAdmin
-    .from('compliance_alert_events')
-    .update({
-      automation_run_id: runId,
-    })
-    .in('id', eventIds)
-
-  throwIfError(error, 'Failed to attach compliance alert events to automation run')
+  if (eventIds.length === 0) return
+  await prisma.compliance_alert_events.updateMany({ where: { id: { in: eventIds } }, data: { automation_run_id: runId } })
 }
 
 export async function runComplianceAlerts(now = new Date(), options?: { jobId?: string | null }) {
@@ -558,157 +328,36 @@ export async function runComplianceAlerts(now = new Date(), options?: { jobId?: 
   const existingEvents = await loadComplianceAlertEvents()
   const sentMap = buildSentThresholdMap(existingEvents)
 
-  let alertsSent = 0
-  let skippedDisabled = 0
-  let candidatesConsidered = 0
-  let failures = 0
+  let alertsSent = 0; let skippedDisabled = 0; let candidatesConsidered = 0; let failures = 0
   const complianceAlertEventIds: string[] = []
 
   for (const row of rows) {
     const complianceEnabled = settingsMap.get(row.owner_id) ?? true
-    if (!complianceEnabled) {
-      skippedDisabled += complianceDateTypes.length
-      continue
-    }
+    if (!complianceEnabled) { skippedDisabled += complianceDateTypes.length; continue }
 
     for (const dateType of complianceDateTypes) {
       const relevantDateValue = relevantDateForType(row, dateType)
       const parsedDate = parseDateOnly(relevantDateValue)
-      if (!parsedDate) {
-        continue
-      }
+      if (!parsedDate) continue
 
       const daysRemaining = daysUntil(parsedDate, now)
-      if (daysRemaining < 0 || daysRemaining > 120) {
-        continue
-      }
+      if (daysRemaining < 0 || daysRemaining > 120) continue
 
       const sentThresholds = sentMap.get(`${row.id}:${dateType}`) ?? new Set<ComplianceThreshold>()
       const threshold = nextThresholdForDays(daysRemaining, sentThresholds)
-      if (!threshold) {
-        continue
-      }
+      if (!threshold) continue
 
       candidatesConsidered += 1
 
       try {
-        const draft = buildDraftScaffold({
-          row,
-          dateType,
-          threshold,
-          daysRemaining,
-        })
+        const draft = buildDraftScaffold({ row, dateType, threshold, daysRemaining })
+        const templateVariables = buildTemplateVariables({ row, dateType, threshold, daysRemaining, draftTitle: draft.draftTitle, recommendedAction: draft.nextAction })
+        const notification = await createComplianceOwnerNotification({ row, dateType, threshold, daysRemaining, recommendedAction: draft.nextAction, notificationType: draft.notificationType, templateVariables })
 
-        const templateVariables = buildTemplateVariables({
-          row,
-          dateType,
-          threshold,
-          daysRemaining,
-          draftTitle: draft.draftTitle,
-          recommendedAction: draft.nextAction,
-        })
-
-        const notification = await createComplianceOwnerNotification({
-          row,
-          dateType,
-          threshold,
-          daysRemaining,
-          recommendedAction: draft.nextAction,
-          notificationType: draft.notificationType,
-          templateVariables,
-        })
-
-        const deliveryResult = await deliverOwnerAutomationMessage({
-          organizationId: row.organization_id,
-          ownerId: row.owner_id,
-          templateKey: draft.notificationType,
-          templateVariables,
-          email: {
-            subject: notification.title,
-            preheader: `${row.properties?.property_name ?? 'Property'} requires compliance action in ${daysRemaining} days.`,
-            eyebrow: threshold === 30 ? 'Urgent Compliance Window' : 'Compliance Alert',
-            title: notification.title,
-            intro: [
-              `Hello ${ownerDisplayName(row.owners)},`,
-              threshold === 30
-                ? 'A legal milestone has reached the 30-day action window and needs immediate review.'
-                : 'A legal milestone is approaching and has entered the scheduled reminder window.',
-            ],
-            details: [
-              { label: 'Property', value: row.properties?.property_name ?? 'Not provided', emphasize: true, tone: 'accent' },
-              { label: 'Unit', value: row.properties?.unit_number ?? 'Not provided' },
-              { label: 'Tenant', value: row.tenants?.full_name ?? 'Not provided' },
-              { label: 'Tenant Access ID', value: row.tenants?.tenant_access_id ?? 'Not provided' },
-              { label: 'Trigger', value: triggerLabel(dateType), emphasize: true, tone: threshold === 30 ? 'security' : 'accent' },
-              { label: 'Relevant Date', value: formatDateLabel(relevantDateValue), emphasize: true },
-              { label: 'Days Remaining', value: String(daysRemaining), emphasize: true, tone: threshold === 30 ? 'security' : 'default' },
-              { label: 'Next Action', value: draft.nextAction },
-            ],
-            body: draft.draftBody ? [draft.draftBody] : [notification.message],
-            note: {
-              title: threshold === 30 ? 'Action window note' : 'Reminder note',
-              body:
-                threshold === 30
-                  ? 'This alert includes a draft preparation note so your team can review legal steps without fabricating any final legal document.'
-                  : 'This reminder is sent once per threshold and remains organization-scoped inside Prophives.',
-              tone: threshold === 30 ? 'warning' : 'info',
-            },
-            cta: {
-              label: 'Open automation center',
-              url: ownerDashboardUrl(),
-            },
-            footer: [
-              `Ejari expiry: ${formatDateLabel(row.ejari_expiry)}`,
-              `Contract end: ${formatDateLabel(row.contract_end)}`,
-              `RERA notice date: ${formatDateLabel(row.rera_notice_date)}`,
-            ],
-          },
-          telegram: {
-            fallbackText: [
-              threshold === 30 ? 'Urgent compliance alert' : 'Compliance alert',
-              `Property: ${row.properties?.property_name ?? 'Not provided'} (${unitLabel(row.properties?.unit_number)})`,
-              `Trigger: ${triggerLabel(dateType)}`,
-              `Relevant date: ${formatDateLabel(relevantDateValue)}`,
-              `Days remaining: ${daysRemaining}`,
-              `Next action: ${draft.nextAction}`,
-            ].join('\n'),
-          },
-          whatsapp: {
-            fallbackText: `${triggerLabel(dateType)} for ${row.properties?.property_name ?? 'your property'} is due in ${daysRemaining} days. ${draft.nextAction}`,
-          },
-        })
+        const deliveryResult = await deliverOwnerAutomationMessage({ organizationId: row.organization_id, ownerId: row.owner_id, templateKey: draft.notificationType, templateVariables, email: { subject: notification.title, preheader: `${row.properties?.property_name ?? 'Property'} requires compliance action in ${daysRemaining} days.`, eyebrow: threshold === 30 ? 'Urgent Compliance Window' : 'Compliance Alert', title: notification.title, intro: [`Hello ${ownerDisplayName(row.owners)},`, threshold === 30 ? 'A legal milestone has reached the 30-day action window and needs immediate review.' : 'A legal milestone is approaching and has entered the scheduled reminder window.'], details: [{ label: 'Property', value: row.properties?.property_name ?? 'Not provided', emphasize: true, tone: 'accent' }, { label: 'Unit', value: row.properties?.unit_number ?? 'Not provided' }, { label: 'Tenant', value: row.tenants?.full_name ?? 'Not provided' }, { label: 'Tenant Access ID', value: row.tenants?.tenant_access_id ?? 'Not provided' }, { label: 'Trigger', value: triggerLabel(dateType), emphasize: true, tone: threshold === 30 ? 'security' : 'accent' }, { label: 'Relevant Date', value: formatDateLabel(relevantDateValue), emphasize: true }, { label: 'Days Remaining', value: String(daysRemaining), emphasize: true, tone: threshold === 30 ? 'security' : 'default' }, { label: 'Next Action', value: draft.nextAction }], body: draft.draftBody ? [draft.draftBody] : [notification.message], note: { title: threshold === 30 ? 'Action window note' : 'Reminder note', body: threshold === 30 ? 'This alert includes a draft preparation note so your team can review legal steps without fabricating any final legal document.' : 'This reminder is sent once per threshold and remains organization-scoped inside Prophives.', tone: threshold === 30 ? 'warning' : 'info' }, cta: { label: 'Open automation center', url: ownerDashboardUrl() }, footer: [`Ejari expiry: ${formatDateLabel(row.ejari_expiry)}`, `Contract end: ${formatDateLabel(row.contract_end)}`, `RERA notice date: ${formatDateLabel(row.rera_notice_date)}`] }, telegram: { fallbackText: [threshold === 30 ? 'Urgent compliance alert' : 'Compliance alert', `Property: ${row.properties?.property_name ?? 'Not provided'} (${unitLabel(row.properties?.unit_number)})`, `Trigger: ${triggerLabel(dateType)}`, `Relevant date: ${formatDateLabel(relevantDateValue)}`, `Days remaining: ${daysRemaining}`, `Next action: ${draft.nextAction}`].join('\n') }, whatsapp: { fallbackText: `${triggerLabel(dateType)} for ${row.properties?.property_name ?? 'your property'} is due in ${daysRemaining} days. ${draft.nextAction}` } })
 
         const sentAt = new Date().toISOString()
-        const eventId = await recordComplianceAlertEvent({
-          row,
-          dateType,
-          threshold,
-          daysRemaining,
-          notificationType: draft.notificationType,
-          title: notification.title,
-          preview: notification.message,
-          nextAction: draft.nextAction,
-          legalActionRecommended: draft.legalActionRecommended,
-          legalActionInitiated: row.form12_sent,
-          draftTitle: draft.draftTitle,
-          draftBody: draft.draftBody,
-          draftPayload: {
-            trigger_date_type: dateType,
-            threshold,
-            recommended_action: draft.nextAction,
-            tenant_access_id: row.tenants?.tenant_access_id ?? null,
-          },
-          automationJobId: options?.jobId ?? null,
-          deliveryChannels: [
-            { channel: 'in_app', status: 'sent' },
-            ...deliveryResult.deliveries.map((delivery) => ({
-              channel: delivery.channel,
-              status: delivery.status,
-              ...(delivery.reason ? { reason: delivery.reason } : {}),
-            })),
-          ],
-          sentAt,
-        })
+        const eventId = await recordComplianceAlertEvent({ row, dateType, threshold, daysRemaining, notificationType: draft.notificationType, title: notification.title, preview: notification.message, nextAction: draft.nextAction, legalActionRecommended: draft.legalActionRecommended, legalActionInitiated: row.form12_sent, draftTitle: draft.draftTitle, draftBody: draft.draftBody, draftPayload: { trigger_date_type: dateType, threshold, recommended_action: draft.nextAction, tenant_access_id: row.tenants?.tenant_access_id ?? null }, automationJobId: options?.jobId ?? null, deliveryChannels: [{ channel: 'in_app', status: 'sent' }, ...deliveryResult.deliveries.map((d) => ({ channel: d.channel, status: d.status, ...(d.reason ? { reason: d.reason } : {}) }))], sentAt })
 
         complianceAlertEventIds.push(eventId)
         await markLegacyThresholdSent(row, threshold, sentAt)
@@ -720,112 +369,51 @@ export async function runComplianceAlerts(now = new Date(), options?: { jobId?: 
         alertsSent += 1
       } catch (error) {
         failures += 1
-        await logComplianceRowFailure({
-          jobId: options?.jobId,
-          row,
-          dateType,
-          threshold,
-          daysRemaining,
-          errorMessage: error instanceof Error ? error.message : 'Unknown compliance alert failure',
-        })
+        await logComplianceRowFailure({ jobId: options?.jobId, row, dateType, threshold, daysRemaining, errorMessage: error instanceof Error ? error.message : 'Unknown compliance alert failure' })
       }
     }
   }
 
-  return {
-    records_scanned: rows.length,
-    candidates_considered: candidatesConsidered,
-    alerts_sent: alertsSent,
-    skipped_disabled: skippedDisabled,
-    failures,
-    compliance_alert_event_ids: complianceAlertEventIds,
-  }
+  return { records_scanned: rows.length, candidates_considered: candidatesConsidered, alerts_sent: alertsSent, skipped_disabled: skippedDisabled, failures, compliance_alert_event_ids: complianceAlertEventIds }
 }
 
 function deriveUpcomingItems(rows: ComplianceRow[], events: ComplianceAlertEventRow[], now: Date): ComplianceUpcomingItem[] {
   const sentMap = buildSentThresholdMap(events)
   const latestEventMap = new Map<string, ComplianceAlertEventRow>()
-
   for (const event of events) {
     const key = `${event.legal_date_id}:${event.trigger_date_type}`
-    if (!latestEventMap.has(key)) {
-      latestEventMap.set(key, event)
-    }
+    if (!latestEventMap.has(key)) latestEventMap.set(key, event)
   }
 
   const items: ComplianceUpcomingItem[] = []
-
   for (const row of rows) {
     for (const dateType of complianceDateTypes) {
       const relevantDateValue = relevantDateForType(row, dateType)
       const parsedDate = parseDateOnly(relevantDateValue)
-      if (!parsedDate) {
-        continue
-      }
+      if (!parsedDate) continue
 
       const daysRemaining = daysUntil(parsedDate, now)
-      if (daysRemaining < 0 || daysRemaining > 120) {
-        continue
-      }
+      if (daysRemaining < 0 || daysRemaining > 120) continue
 
       const mapKey = `${row.id}:${dateType}`
       const sentThresholds = sentMap.get(mapKey) ?? new Set<ComplianceThreshold>()
       const latestEvent = latestEventMap.get(mapKey) ?? null
       const threshold = nextThresholdForDays(daysRemaining, sentThresholds)
-      const draft = buildDraftScaffold({
-        row,
-        dateType,
-        threshold: threshold ?? 30,
-        daysRemaining,
-      })
+      const draft = buildDraftScaffold({ row, dateType, threshold: threshold ?? 30, daysRemaining })
 
-      items.push({
-        legal_date_id: row.id,
-        organization_id: row.organization_id,
-        owner_id: row.owner_id,
-        property_id: row.property_id,
-        tenant_id: row.tenant_id,
-        trigger_date_type: dateType,
-        trigger_label: triggerLabel(dateType),
-        property_name: row.properties?.property_name ?? 'Not provided',
-        unit_number: row.properties?.unit_number ?? null,
-        tenant_name: row.tenants?.full_name ?? null,
-        tenant_access_id: row.tenants?.tenant_access_id ?? null,
-        relevant_date: relevantDateValue ?? '',
-        relevant_date_label: formatDateLabel(relevantDateValue),
-        days_remaining: daysRemaining,
-        next_threshold: threshold,
-        last_sent_at: latestEvent?.sent_at ?? null,
-        last_sent_threshold: latestEvent?.threshold_days ?? null,
-        next_action: latestEvent?.next_action ?? draft.nextAction,
-        legal_action_initiated: latestEvent?.legal_action_initiated ?? row.form12_sent,
-        draft_title: latestEvent?.draft_title ?? draft.draftTitle,
-      })
+      items.push({ legal_date_id: row.id, organization_id: row.organization_id, owner_id: row.owner_id, property_id: row.property_id, tenant_id: row.tenant_id, trigger_date_type: dateType, trigger_label: triggerLabel(dateType), property_name: row.properties?.property_name ?? 'Not provided', unit_number: row.properties?.unit_number ?? null, tenant_name: row.tenants?.full_name ?? null, tenant_access_id: row.tenants?.tenant_access_id ?? null, relevant_date: relevantDateValue ?? '', relevant_date_label: formatDateLabel(relevantDateValue), days_remaining: daysRemaining, next_threshold: threshold, last_sent_at: latestEvent?.sent_at ?? null, last_sent_threshold: latestEvent?.threshold_days ?? null, next_action: latestEvent?.next_action ?? draft.nextAction, legal_action_initiated: latestEvent?.legal_action_initiated ?? row.form12_sent, draft_title: latestEvent?.draft_title ?? draft.draftTitle })
     }
   }
 
-  return items.sort((left, right) => left.days_remaining - right.days_remaining)
+  return items.sort((l, r) => l.days_remaining - r.days_remaining)
 }
 
 async function loadRecentComplianceFailures(filter: { organizationId?: string; ownerId?: string }) {
-  let query = supabaseAdmin
-    .from('automation_errors')
-    .select('id, job_id, organization_id, owner_id, flow_name, error_message, context, created_at')
-    .eq('flow_name', 'compliance_scan')
-    .order('created_at', { ascending: false })
-    .limit(10)
+  const where: Record<string, unknown> = { flow_name: 'compliance_scan' }
+  if (filter.organizationId) where.organization_id = filter.organizationId
+  if (filter.ownerId) where.owner_id = filter.ownerId
 
-  if (filter.organizationId) {
-    query = query.eq('organization_id', filter.organizationId)
-  }
-
-  if (filter.ownerId) {
-    query = query.eq('owner_id', filter.ownerId)
-  }
-
-  const { data, error } = await query
-  throwIfError(error, 'Failed to load compliance failures')
-  return data ?? []
+  return prisma.automation_errors.findMany({ select: { id: true, job_id: true, organization_id: true, owner_id: true, flow_name: true, error_message: true, context: true, created_at: true }, where, orderBy: { created_at: 'desc' }, take: 10 })
 }
 
 export async function getOwnerComplianceOverview(ownerId: string, organizationId: string, now = new Date()) {
@@ -834,12 +422,7 @@ export async function getOwnerComplianceOverview(ownerId: string, organizationId
     loadComplianceAlertEvents({ organizationId, ownerId }),
     loadRecentComplianceFailures({ organizationId, ownerId }),
   ])
-
-  return {
-    upcoming_items: deriveUpcomingItems(rows, events, now).slice(0, 12),
-    sent_reminders: events.slice(0, 12),
-    failures,
-  }
+  return { upcoming_items: deriveUpcomingItems(rows, events, now).slice(0, 12), sent_reminders: events.slice(0, 12), failures }
 }
 
 export async function getAdminComplianceOverview(input: { organizationId?: string; now?: Date }) {
@@ -849,10 +432,5 @@ export async function getAdminComplianceOverview(input: { organizationId?: strin
     loadComplianceAlertEvents({ organizationId: input.organizationId }),
     loadRecentComplianceFailures({ organizationId: input.organizationId }),
   ])
-
-  return {
-    upcoming_items: deriveUpcomingItems(rows, events, now).slice(0, 16),
-    sent_reminders: events.slice(0, 16),
-    failures,
-  }
+  return { upcoming_items: deriveUpcomingItems(rows, events, now).slice(0, 16), sent_reminders: events.slice(0, 16), failures }
 }

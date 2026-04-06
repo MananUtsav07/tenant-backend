@@ -1,13 +1,5 @@
-import type { PostgrestError } from '@supabase/supabase-js'
-
 import { AppError } from '../lib/errors.js'
-import { supabaseAdmin } from '../lib/supabase.js'
-
-function throwIfError(error: PostgrestError | null, message: string): void {
-  if (error) {
-    throw new AppError(message, 500, error.message)
-  }
-}
+import { prisma } from '../lib/db.js'
 
 function slugify(value: string): string {
   const normalized = value
@@ -19,8 +11,7 @@ function slugify(value: string): string {
 }
 
 async function slugExists(slug: string): Promise<boolean> {
-  const { data, error } = await supabaseAdmin.from('organizations').select('id').eq('slug', slug).maybeSingle()
-  throwIfError(error, 'Failed to verify organization slug')
+  const data = await prisma.organizations.findFirst({ where: { slug }, select: { id: true } })
   return Boolean(data)
 }
 
@@ -50,26 +41,22 @@ export async function createOrganization(input: {
 }) {
   const slug = input.slug ?? (await generateUniqueOrganizationSlug(input.name))
 
-  const { data, error } = await supabaseAdmin
-    .from('organizations')
-    .insert({
+  const data = await prisma.organizations.create({
+    data: {
       name: input.name,
       slug,
       plan_code: input.plan_code ?? 'starter',
       country_code: input.country_code ?? 'IN',
       currency_code: input.currency_code ?? 'INR',
       created_at: input.created_at ?? new Date().toISOString(),
-    })
-    .select('*')
-    .single()
+    },
+  })
 
-  throwIfError(error, 'Failed to create organization')
   return data
 }
 
 export async function getOrganizationById(organizationId: string) {
-  const { data, error } = await supabaseAdmin.from('organizations').select('*').eq('id', organizationId).maybeSingle()
-  throwIfError(error, 'Failed to load organization')
+  const data = await prisma.organizations.findUnique({ where: { id: organizationId } })
   return data
 }
 
@@ -83,25 +70,33 @@ export async function listOrganizationsBasic(query: {
   const from = (query.page - 1) * query.page_size
   const to = from + query.page_size - 1
 
-  let request = supabaseAdmin
-    .from('organizations')
-    .select('id, name, slug, plan_code, created_at', { count: 'exact' })
-    .order(query.sort_by, { ascending: query.sort_order === 'asc' })
-    .range(from, to)
+  const where: Record<string, unknown> = {}
 
   if (query.search && query.search.trim().length > 0) {
     const escaped = query.search.trim().replace(/[%_]/g, '').replaceAll(',', ' ')
     if (escaped.length > 0) {
-      request = request.or(`name.ilike.%${escaped}%,slug.ilike.%${escaped}%,plan_code.ilike.%${escaped}%`)
+      where.OR = [
+        { name: { contains: escaped, mode: 'insensitive' } },
+        { slug: { contains: escaped, mode: 'insensitive' } },
+        { plan_code: { contains: escaped, mode: 'insensitive' } },
+      ]
     }
   }
 
-  const { data, error, count } = await request
-  throwIfError(error, 'Failed to list organizations')
+  const [data, total] = await Promise.all([
+    prisma.organizations.findMany({
+      where,
+      select: { id: true, name: true, slug: true, plan_code: true, created_at: true },
+      orderBy: { [query.sort_by]: query.sort_order },
+      skip: from,
+      take: to - from + 1,
+    }),
+    prisma.organizations.count({ where }),
+  ])
 
   return {
-    items: data ?? [],
-    total: count ?? 0,
+    items: data,
+    total,
   }
 }
 
@@ -110,19 +105,22 @@ export async function upsertOwnerMembership(input: {
   owner_id: string
   role?: 'owner' | 'manager' | 'viewer'
 }) {
-  const { data, error } = await supabaseAdmin
-    .from('owner_memberships')
-    .upsert(
-      {
+  const data = await prisma.owner_memberships.upsert({
+    where: {
+      organization_id_owner_id: {
         organization_id: input.organization_id,
         owner_id: input.owner_id,
-        role: input.role ?? 'owner',
       },
-      { onConflict: 'organization_id,owner_id' },
-    )
-    .select('*')
-    .single()
+    },
+    create: {
+      organization_id: input.organization_id,
+      owner_id: input.owner_id,
+      role: input.role ?? 'owner',
+    },
+    update: {
+      role: input.role ?? 'owner',
+    },
+  })
 
-  throwIfError(error, 'Failed to create owner membership')
   return data
 }

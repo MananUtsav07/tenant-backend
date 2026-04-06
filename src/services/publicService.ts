@@ -1,26 +1,16 @@
-import type { PostgrestError } from '@supabase/supabase-js'
-
 import { AppError } from '../lib/errors.js'
-import { supabaseAdmin } from '../lib/supabase.js'
-
-function throwIfError(error: PostgrestError | null, message: string): void {
-  if (error) {
-    throw new AppError(message, 500, error.message)
-  }
-}
+import { prisma } from '../lib/db.js'
 
 export async function createContactMessage(input: { name: string; email: string; message: string }) {
-  const { data, error } = await supabaseAdmin
-    .from('contact_messages')
-    .insert({
+  const data = await prisma.contact_messages.create({
+    data: {
       name: input.name,
       email: input.email,
       message: input.message,
-    })
-    .select('id, created_at')
-    .single()
+    },
+    select: { id: true, created_at: true },
+  })
 
-  throwIfError(error, 'Failed to create contact message')
   if (!data) {
     throw new AppError('Failed to create contact message', 500)
   }
@@ -40,30 +30,16 @@ function getDueDaysForNextWeek(referenceDate: Date): number[] {
 export async function getPublicOperationsSnapshot() {
   const dueDays = getDueDaysForNextWeek(new Date())
 
-  const [openTicketsResult, activeTenantsResult, dueThisWeekResult] = await Promise.all([
-    supabaseAdmin
-      .from('support_tickets')
-      .select('id', { count: 'exact', head: true })
-      .in('status', ['open', 'in_progress']),
-    supabaseAdmin
-      .from('tenants')
-      .select('id', { count: 'exact', head: true })
-      .eq('status', 'active'),
-    supabaseAdmin
-      .from('tenants')
-      .select('id', { count: 'exact', head: true })
-      .eq('status', 'active')
-      .in('payment_due_day', dueDays),
+  const [openTicketsCount, activeTenantsCount, dueThisWeekCount] = await Promise.all([
+    prisma.support_tickets.count({ where: { status: { in: ['open', 'in_progress'] } } }),
+    prisma.tenants.count({ where: { status: 'active' } }),
+    prisma.tenants.count({ where: { status: 'active', payment_due_day: { in: dueDays } } }),
   ])
 
-  throwIfError(openTicketsResult.error, 'Failed to count open tickets')
-  throwIfError(activeTenantsResult.error, 'Failed to count active tenants')
-  throwIfError(dueThisWeekResult.error, 'Failed to count due this week')
-
   return {
-    open_tickets: openTicketsResult.count ?? 0,
-    active_tenants: activeTenantsResult.count ?? 0,
-    due_this_week: dueThisWeekResult.count ?? 0,
+    open_tickets: openTicketsCount,
+    active_tenants: activeTenantsCount,
+    due_this_week: dueThisWeekCount,
     generated_at: new Date().toISOString(),
   }
 }

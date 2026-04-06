@@ -1,7 +1,5 @@
-import type { PostgrestError } from '@supabase/supabase-js'
-
 import { AppError } from '../lib/errors.js'
-import { supabaseAdmin } from '../lib/supabase.js'
+import { prisma } from '../lib/db.js'
 import { addDays } from '../utils/date.js'
 import { enqueueCashFlowRefreshJob } from './automationEngineService.js'
 import { notifyOwnerRentPaymentAwaitingApproval, notifyTenantRentPaymentReviewed } from './notificationService.js'
@@ -36,9 +34,39 @@ type RentPaymentApprovalRow = {
   updated_at: string
 }
 
-function throwIfError(error: PostgrestError | null, message: string): void {
-  if (error) {
-    throw new AppError(message, 500, error.message)
+function serializeApproval(row: {
+  id: string
+  organization_id: string
+  owner_id: string | null
+  tenant_id: string | null
+  property_id: string | null
+  cycle_year: number
+  cycle_month: number
+  due_date: Date | string
+  amount_paid: number | { toNumber: () => number } | null
+  status: string
+  rejection_reason: string | null
+  reviewed_by_owner_id: string | null
+  reviewed_at: Date | string | null
+  created_at: Date | string
+  updated_at: Date | string
+}): RentPaymentApprovalRow {
+  return {
+    id: row.id,
+    organization_id: row.organization_id,
+    owner_id: row.owner_id ?? '',
+    tenant_id: row.tenant_id ?? '',
+    property_id: row.property_id ?? '',
+    cycle_year: row.cycle_year,
+    cycle_month: row.cycle_month,
+    due_date: row.due_date instanceof Date ? row.due_date.toISOString().slice(0, 10) : String(row.due_date),
+    amount_paid: Number(row.amount_paid ?? 0),
+    status: row.status as RentPaymentApprovalStatus,
+    rejection_reason: row.rejection_reason,
+    reviewed_by_owner_id: row.reviewed_by_owner_id,
+    reviewed_at: row.reviewed_at instanceof Date ? row.reviewed_at.toISOString() : (row.reviewed_at as string | null),
+    created_at: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
+    updated_at: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at),
   }
 }
 
@@ -88,26 +116,30 @@ async function syncApprovedRentLedgerEntry(input: {
   dueDate: string
   amountPaid: number
 }) {
-  const { error } = await supabaseAdmin
-    .from('rent_ledger')
-    .upsert(
-      {
-        organization_id: input.organizationId,
-        owner_id: input.ownerId,
-        tenant_id: input.tenantId,
-        property_id: input.propertyId,
-        cycle_year: input.cycleYear,
-        cycle_month: input.cycleMonth,
-        due_date: input.dueDate,
-        amount_due: input.amountPaid,
-        amount_paid: input.amountPaid,
-        paid_date: new Date().toISOString().slice(0, 10),
-        status: 'paid',
-      },
-      { onConflict: 'organization_id,tenant_id,cycle_year,cycle_month' },
-    )
+  const existing = await prisma.rent_ledger.findFirst({
+    where: { organization_id: input.organizationId, tenant_id: input.tenantId, cycle_year: input.cycleYear, cycle_month: input.cycleMonth },
+    select: { id: true },
+  })
 
-  throwIfError(error, 'Failed to synchronize approved rent into ledger')
+  const ledgerData = {
+    organization_id: input.organizationId,
+    owner_id: input.ownerId,
+    tenant_id: input.tenantId,
+    property_id: input.propertyId,
+    cycle_year: input.cycleYear,
+    cycle_month: input.cycleMonth,
+    due_date: new Date(input.dueDate),
+    amount_due: input.amountPaid,
+    amount_paid: input.amountPaid,
+    paid_date: new Date(new Date().toISOString().slice(0, 10)),
+    status: 'paid',
+  }
+
+  if (existing) {
+    await prisma.rent_ledger.update({ where: { id: existing.id }, data: { ...ledgerData, updated_at: new Date() } })
+  } else {
+    await prisma.rent_ledger.create({ data: ledgerData })
+  }
 }
 
 async function findApprovalForCycle(input: {
@@ -116,20 +148,13 @@ async function findApprovalForCycle(input: {
   cycleYear: number
   cycleMonth: number
 }): Promise<RentPaymentApprovalRow | null> {
-  const { data, error } = await supabaseAdmin
-    .from('rent_payment_approvals')
-    .select(
-      'id, organization_id, owner_id, tenant_id, property_id, cycle_year, cycle_month, due_date, amount_paid, status, rejection_reason, reviewed_by_owner_id, reviewed_at, created_at, updated_at',
-    )
-    .eq('organization_id', input.organizationId)
-    .eq('tenant_id', input.tenantId)
-    .eq('cycle_year', input.cycleYear)
-    .eq('cycle_month', input.cycleMonth)
-    .order('created_at', { ascending: false })
-    .limit(1)
+  const row = await prisma.rent_payment_approvals.findFirst({
+    select: { id: true, organization_id: true, owner_id: true, tenant_id: true, property_id: true, cycle_year: true, cycle_month: true, due_date: true, amount_paid: true, status: true, rejection_reason: true, reviewed_by_owner_id: true, reviewed_at: true, created_at: true, updated_at: true },
+    where: { organization_id: input.organizationId, tenant_id: input.tenantId, cycle_year: input.cycleYear, cycle_month: input.cycleMonth },
+    orderBy: { created_at: 'desc' },
+  })
 
-  throwIfError(error, 'Failed to load rent payment state')
-  return (data?.[0] as RentPaymentApprovalRow | undefined) ?? null
+  return row ? serializeApproval(row) : null
 }
 
 async function buildTenantRentPaymentContext(input: {
@@ -151,21 +176,13 @@ async function buildTenantRentPaymentContext(input: {
     cycleMonth: cycle.cycle_month,
   })
 
-  const { data: unresolvedRows, error: unresolvedError } = await supabaseAdmin
-    .from('rent_payment_approvals')
-    .select(
-      'id, organization_id, owner_id, tenant_id, property_id, cycle_year, cycle_month, due_date, amount_paid, status, rejection_reason, reviewed_by_owner_id, reviewed_at, created_at, updated_at',
-    )
-    .eq('organization_id', input.organizationId)
-    .eq('tenant_id', input.tenantId)
-    .in('status', ['awaiting_owner_approval', 'rejected'])
-    .order('cycle_year', { ascending: false })
-    .order('cycle_month', { ascending: false })
-    .order('created_at', { ascending: false })
-    .limit(1)
+  const unresolvedRow = await prisma.rent_payment_approvals.findFirst({
+    select: { id: true, organization_id: true, owner_id: true, tenant_id: true, property_id: true, cycle_year: true, cycle_month: true, due_date: true, amount_paid: true, status: true, rejection_reason: true, reviewed_by_owner_id: true, reviewed_at: true, created_at: true, updated_at: true },
+    where: { organization_id: input.organizationId, tenant_id: input.tenantId, status: { in: ['awaiting_owner_approval', 'rejected'] } },
+    orderBy: [{ cycle_year: 'desc' }, { cycle_month: 'desc' }, { created_at: 'desc' }],
+  })
 
-  throwIfError(unresolvedError, 'Failed to load active rent payment approval')
-  const unresolvedApproval = (unresolvedRows?.[0] as RentPaymentApprovalRow | undefined) ?? null
+  const unresolvedApproval = unresolvedRow ? serializeApproval(unresolvedRow) : null
 
   if (unresolvedApproval) {
     const unresolvedDueDate = new Date(`${unresolvedApproval.due_date}T09:00:00.000Z`)
@@ -243,49 +260,39 @@ export async function submitTenantRentPayment(input: { tenantId: string; organiz
     throw new AppError('Rent payment is already approved for this cycle', 409)
   }
 
+  const select = { id: true, organization_id: true, owner_id: true, tenant_id: true, property_id: true, cycle_year: true, cycle_month: true, due_date: true, amount_paid: true, status: true, rejection_reason: true, reviewed_by_owner_id: true, reviewed_at: true, created_at: true, updated_at: true }
+
   let approval: RentPaymentApprovalRow
   if (context.approval && context.approval.status === 'rejected') {
-    const { data, error } = await supabaseAdmin
-      .from('rent_payment_approvals')
-      .update({
+    const row = await prisma.rent_payment_approvals.update({
+      select,
+      where: { id: context.approval.id },
+      data: {
         status: 'awaiting_owner_approval',
         rejection_reason: null,
         reviewed_at: null,
         reviewed_by_owner_id: null,
-        due_date: context.cycle.due_date.toISOString().slice(0, 10),
+        due_date: context.cycle.due_date,
         amount_paid: context.tenant.monthly_rent,
-      })
-      .eq('id', context.approval.id)
-      .eq('organization_id', input.organizationId)
-      .eq('tenant_id', input.tenantId)
-      .select(
-        'id, organization_id, owner_id, tenant_id, property_id, cycle_year, cycle_month, due_date, amount_paid, status, rejection_reason, reviewed_by_owner_id, reviewed_at, created_at, updated_at',
-      )
-      .single()
-
-    throwIfError(error, 'Failed to submit rent payment for verification')
-    approval = data as RentPaymentApprovalRow
+      },
+    })
+    approval = serializeApproval(row)
   } else {
-    const { data, error } = await supabaseAdmin
-      .from('rent_payment_approvals')
-      .insert({
+    const row = await prisma.rent_payment_approvals.create({
+      select,
+      data: {
         organization_id: input.organizationId,
         owner_id: context.tenant.owner_id,
         tenant_id: context.tenant.id,
         property_id: context.tenant.property_id,
         cycle_year: context.cycle.cycle_year,
         cycle_month: context.cycle.cycle_month,
-        due_date: context.cycle.due_date.toISOString().slice(0, 10),
+        due_date: context.cycle.due_date,
         amount_paid: context.tenant.monthly_rent,
         status: 'awaiting_owner_approval',
-      })
-      .select(
-        'id, organization_id, owner_id, tenant_id, property_id, cycle_year, cycle_month, due_date, amount_paid, status, rejection_reason, reviewed_by_owner_id, reviewed_at, created_at, updated_at',
-      )
-      .single()
-
-    throwIfError(error, 'Failed to submit rent payment for verification')
-    approval = data as RentPaymentApprovalRow
+      },
+    })
+    approval = serializeApproval(row)
   }
 
   await notifyOwnerRentPaymentAwaitingApproval({
@@ -308,25 +315,15 @@ export async function submitTenantRentPayment(input: { tenantId: string; organiz
     now: input.now,
   })
 
-  return {
-    approval,
-    state,
-  }
+  return { approval, state }
 }
 
 export async function listOwnerAwaitingRentPaymentApprovals(input: { ownerId: string; organizationId: string }) {
-  const { data, error } = await supabaseAdmin
-    .from('rent_payment_approvals')
-    .select(
-      'id, organization_id, owner_id, tenant_id, property_id, cycle_year, cycle_month, due_date, amount_paid, status, rejection_reason, reviewed_by_owner_id, reviewed_at, created_at, updated_at, tenants(full_name, tenant_access_id), properties(property_name, unit_number)',
-    )
-    .eq('organization_id', input.organizationId)
-    .eq('owner_id', input.ownerId)
-    .eq('status', 'awaiting_owner_approval')
-    .order('created_at', { ascending: false })
-
-  throwIfError(error, 'Failed to list rent payment approvals')
-  return data ?? []
+  return prisma.rent_payment_approvals.findMany({
+    select: { id: true, organization_id: true, owner_id: true, tenant_id: true, property_id: true, cycle_year: true, cycle_month: true, due_date: true, amount_paid: true, status: true, rejection_reason: true, reviewed_by_owner_id: true, reviewed_at: true, created_at: true, updated_at: true, tenants: { select: { full_name: true, tenant_access_id: true } }, properties: { select: { property_name: true, unit_number: true } } },
+    where: { organization_id: input.organizationId, owner_id: input.ownerId, status: 'awaiting_owner_approval' },
+    orderBy: { created_at: 'desc' },
+  })
 }
 
 export async function reviewOwnerRentPaymentApproval(input: {
@@ -337,17 +334,10 @@ export async function reviewOwnerRentPaymentApproval(input: {
   rejectionReason?: string
   ownerMessage?: string
 }) {
-  const { data: existing, error: existingError } = await supabaseAdmin
-    .from('rent_payment_approvals')
-    .select(
-      'id, organization_id, owner_id, tenant_id, property_id, cycle_year, cycle_month, due_date, amount_paid, status, rejection_reason, reviewed_by_owner_id, reviewed_at, created_at, updated_at',
-    )
-    .eq('id', input.approvalId)
-    .eq('organization_id', input.organizationId)
-    .eq('owner_id', input.ownerId)
-    .maybeSingle()
-
-  throwIfError(existingError, 'Failed to load rent payment approval')
+  const existing = await prisma.rent_payment_approvals.findFirst({
+    select: { id: true, status: true },
+    where: { id: input.approvalId, organization_id: input.organizationId, owner_id: input.ownerId },
+  })
 
   if (!existing) {
     throw new AppError('Rent payment approval item not found in your organization', 404)
@@ -359,56 +349,34 @@ export async function reviewOwnerRentPaymentApproval(input: {
 
   const reviewPayload =
     input.action === 'approve'
-      ? {
-          status: 'approved' as const,
-          rejection_reason: null,
-          reviewed_by_owner_id: input.ownerId,
-          reviewed_at: new Date().toISOString(),
-        }
-      : {
-          status: 'rejected' as const,
-          rejection_reason: input.rejectionReason?.trim() || null,
-          reviewed_by_owner_id: input.ownerId,
-          reviewed_at: new Date().toISOString(),
-        }
+      ? { status: 'approved' as const, rejection_reason: null, reviewed_by_owner_id: input.ownerId, reviewed_at: new Date() }
+      : { status: 'rejected' as const, rejection_reason: input.rejectionReason?.trim() || null, reviewed_by_owner_id: input.ownerId, reviewed_at: new Date() }
 
-  const { data, error } = await supabaseAdmin
-    .from('rent_payment_approvals')
-    .update(reviewPayload)
-    .eq('id', input.approvalId)
-    .eq('organization_id', input.organizationId)
-    .eq('owner_id', input.ownerId)
-    .select(
-      'id, organization_id, owner_id, tenant_id, property_id, cycle_year, cycle_month, due_date, amount_paid, status, rejection_reason, reviewed_by_owner_id, reviewed_at, created_at, updated_at, tenants(full_name, tenant_access_id, email), properties(property_name, unit_number)',
-    )
-    .single()
-
-  throwIfError(error, 'Failed to review rent payment approval')
-  if (!data) {
-    throw new AppError('Failed to review rent payment approval', 500)
-  }
+  const data = await prisma.rent_payment_approvals.update({
+    select: { id: true, organization_id: true, owner_id: true, tenant_id: true, property_id: true, cycle_year: true, cycle_month: true, due_date: true, amount_paid: true, status: true, rejection_reason: true, reviewed_by_owner_id: true, reviewed_at: true, created_at: true, updated_at: true, tenants: { select: { full_name: true, tenant_access_id: true, email: true } }, properties: { select: { property_name: true, unit_number: true } } },
+    where: { id: input.approvalId },
+    data: reviewPayload,
+  })
 
   const reviewedTenant = await getTenantById(data.tenant_id as string, input.organizationId)
+  const tenantRelation = data.tenants as { full_name?: string | null; email?: string | null } | null
+  const propertyRelation = data.properties as { property_name?: string | null; unit_number?: string | null } | null
+  const dueDate = data.due_date instanceof Date ? data.due_date.toISOString().slice(0, 10) : String(data.due_date)
+  const rejectionReason = data.rejection_reason
 
   await notifyTenantRentPaymentReviewed({
     organizationId: input.organizationId,
     ownerId: input.ownerId,
     tenantId: data.tenant_id as string,
-    tenantEmail: reviewedTenant?.email ?? ((data.tenants as { email?: string | null } | null)?.email ?? null),
-    tenantName: (data.tenants as { full_name?: string | null } | null)?.full_name ?? reviewedTenant?.full_name ?? 'Resident',
-    propertyName:
-      (data.properties as { property_name?: string | null } | null)?.property_name ??
-      reviewedTenant?.properties?.property_name ??
-      null,
-    unitNumber:
-      (data.properties as { unit_number?: string | null } | null)?.unit_number ??
-      reviewedTenant?.properties?.unit_number ??
-      null,
-    dueDateIso: data.due_date as string,
+    tenantEmail: reviewedTenant?.email ?? tenantRelation?.email ?? null,
+    tenantName: tenantRelation?.full_name ?? reviewedTenant?.full_name ?? 'Resident',
+    propertyName: propertyRelation?.property_name ?? reviewedTenant?.properties?.property_name ?? null,
+    unitNumber: propertyRelation?.unit_number ?? reviewedTenant?.properties?.unit_number ?? null,
+    dueDateIso: dueDate,
     amountPaid: Number(data.amount_paid ?? 0),
     currencyCode: reviewedTenant?.organizations?.currency_code ?? 'INR',
     status: input.action === 'approve' ? 'approved' : 'rejected',
-    rejectionReason: input.action === 'reject' ? (data.rejection_reason as string | null) ?? null : null,
+    rejectionReason: input.action === 'reject' ? rejectionReason ?? null : null,
     ownerMessage: input.ownerMessage?.trim() || null,
   })
 
@@ -420,7 +388,7 @@ export async function reviewOwnerRentPaymentApproval(input: {
       propertyId: data.property_id as string,
       cycleYear: Number(data.cycle_year),
       cycleMonth: Number(data.cycle_month),
-      dueDate: data.due_date as string,
+      dueDate,
       amountPaid: Number(data.amount_paid ?? 0),
     })
 
@@ -437,13 +405,7 @@ export async function reviewOwnerRentPaymentApproval(input: {
 }
 
 export async function countOwnerAwaitingRentPaymentApprovals(input: { ownerId: string; organizationId: string }) {
-  const { count, error } = await supabaseAdmin
-    .from('rent_payment_approvals')
-    .select('id', { count: 'exact', head: true })
-    .eq('organization_id', input.organizationId)
-    .eq('owner_id', input.ownerId)
-    .eq('status', 'awaiting_owner_approval')
-
-  throwIfError(error, 'Failed to count awaiting rent payment approvals')
-  return count ?? 0
+  return prisma.rent_payment_approvals.count({
+    where: { organization_id: input.organizationId, owner_id: input.ownerId, status: 'awaiting_owner_approval' },
+  })
 }

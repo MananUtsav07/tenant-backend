@@ -42,8 +42,7 @@ const optionalBoolean = z.preprocess(
 const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(8787),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
-  SUPABASE_URL: z.string().url(),
-  SUPABASE_SERVICE_ROLE_KEY: z.string().min(20),
+  DATABASE_URL: z.string().url(),
   JWT_SECRET: z.string().min(20),
   EMAIL_USER: z.string().email(),
   EMAIL_PASS: z.string().min(3),

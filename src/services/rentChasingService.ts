@@ -1,7 +1,5 @@
-import type { PostgrestError } from '@supabase/supabase-js'
-
 import { AppError } from '../lib/errors.js'
-import { supabaseAdmin } from '../lib/supabase.js'
+import { prisma } from '../lib/db.js'
 import { notifyOwnerRentOverdueAlert } from './portfolioVisibilityService.js'
 import { processOwnerReminders } from './reminderService.js'
 
@@ -16,18 +14,7 @@ type ActiveTenantRow = {
   payment_due_day: number
   payment_status: 'pending' | 'paid' | 'overdue' | 'partial'
   status: string
-  properties?:
-    | {
-        property_name: string | null
-        unit_number: string | null
-      }
-    | null
-}
-
-function throwIfError(error: PostgrestError | null, message: string): void {
-  if (error) {
-    throw new AppError(message, 500, error.message)
-  }
+  properties?: { property_name: string | null; unit_number: string | null } | null
 }
 
 function toDueDate(year: number, month: number, paymentDueDay: number): Date {
@@ -37,53 +24,37 @@ function toDueDate(year: number, month: number, paymentDueDay: number): Date {
 }
 
 function toCycle(now: Date): { year: number; month: number } {
-  return {
-    year: now.getUTCFullYear(),
-    month: now.getUTCMonth() + 1,
-  }
+  return { year: now.getUTCFullYear(), month: now.getUTCMonth() + 1 }
 }
 
 async function loadRentChasingSettings(ownerIds: string[]) {
-  if (ownerIds.length === 0) {
-    return new Map<string, boolean>()
-  }
+  if (ownerIds.length === 0) return new Map<string, boolean>()
 
-  const { data, error } = await supabaseAdmin
-    .from('owner_automation_settings')
-    .select('owner_id, rent_chasing_enabled')
-    .in('owner_id', ownerIds)
-
-  throwIfError(error, 'Failed to load owner rent chasing settings')
+  const data = await prisma.owner_automation_settings.findMany({
+    select: { owner_id: true, rent_chasing_enabled: true },
+    where: { owner_id: { in: ownerIds } },
+  })
 
   const map = new Map<string, boolean>()
-  for (const row of data ?? []) {
-    map.set(row.owner_id as string, Boolean(row.rent_chasing_enabled))
+  for (const row of data) {
+    map.set(row.owner_id, Boolean(row.rent_chasing_enabled))
   }
-
   return map
 }
 
 async function loadOwnerCurrencyMap(ownerIds: string[]) {
-  if (ownerIds.length === 0) {
-    return new Map<string, string>()
-  }
+  if (ownerIds.length === 0) return new Map<string, string>()
 
-  const { data, error } = await supabaseAdmin
-    .from('owners')
-    .select('id, organizations(currency_code)')
-    .in('id', ownerIds)
-
-  throwIfError(error, 'Failed to load owner currency settings')
+  const data = await prisma.owners.findMany({
+    select: { id: true, organizations: { select: { currency_code: true } } },
+    where: { id: { in: ownerIds } },
+  })
 
   const map = new Map<string, string>()
-  for (const row of data ?? []) {
-    const organizationsValue = (row as { organizations?: unknown }).organizations
-    const organization = Array.isArray(organizationsValue)
-      ? (organizationsValue[0] as { currency_code?: string | null } | undefined)
-      : ((organizationsValue as { currency_code?: string | null } | null | undefined) ?? null)
-    map.set((row as { id: string }).id, organization?.currency_code?.trim().toUpperCase() || 'INR')
+  for (const row of data) {
+    const org = Array.isArray(row.organizations) ? row.organizations[0] : row.organizations
+    map.set(row.id, (org as { currency_code?: string | null } | null)?.currency_code?.trim().toUpperCase() || 'INR')
   }
-
   return map
 }
 
@@ -93,70 +64,49 @@ async function loadApprovedTenantIds(input: {
   cycleYear: number
   cycleMonth: number
 }) {
-  if (input.tenantIds.length === 0) {
-    return new Set<string>()
-  }
+  if (input.tenantIds.length === 0) return new Set<string>()
 
-  const { data, error } = await supabaseAdmin
-    .from('rent_payment_approvals')
-    .select('tenant_id')
-    .in('organization_id', input.organizationIds)
-    .in('tenant_id', input.tenantIds)
-    .eq('cycle_year', input.cycleYear)
-    .eq('cycle_month', input.cycleMonth)
-    .eq('status', 'approved')
+  const data = await prisma.rent_payment_approvals.findMany({
+    select: { tenant_id: true },
+    where: { organization_id: { in: input.organizationIds }, tenant_id: { in: input.tenantIds }, cycle_year: input.cycleYear, cycle_month: input.cycleMonth, status: 'approved' },
+  })
 
-  throwIfError(error, 'Failed to load approved rent payment entries')
-
-  return new Set<string>((data ?? []).map((row) => row.tenant_id as string))
+  return new Set<string>(data.map((row) => row.tenant_id as string))
 }
 
 export async function runRentChasing(now = new Date()) {
   const { year: cycleYear, month: cycleMonth } = toCycle(now)
 
-  const { data, error } = await supabaseAdmin
-    .from('tenants')
-    .select(
-      'id, organization_id, owner_id, property_id, full_name, tenant_access_id, monthly_rent, payment_due_day, payment_status, status, properties(property_name, unit_number)',
-    )
-    .eq('status', 'active')
+  const rawTenants = await prisma.tenants.findMany({
+    select: { id: true, organization_id: true, owner_id: true, property_id: true, full_name: true, tenant_access_id: true, monthly_rent: true, payment_due_day: true, payment_status: true, status: true, properties: { select: { property_name: true, unit_number: true } } },
+    where: { status: 'active' },
+  })
 
-  throwIfError(error, 'Failed to load active tenants for rent chasing')
-
-  const tenants = ((data ?? []) as Array<Record<string, unknown>>).map((row) => {
-    const propertiesValue = row.properties
-    const property =
-      Array.isArray(propertiesValue) && propertiesValue.length > 0
-        ? ((propertiesValue[0] as { property_name?: string | null; unit_number?: string | null }) ?? null)
-        : ((propertiesValue as { property_name?: string | null; unit_number?: string | null } | null | undefined) ?? null)
-
+  const tenants: ActiveTenantRow[] = rawTenants.map((row) => {
+    const prop = Array.isArray(row.properties) ? row.properties[0] : row.properties
     return {
-      id: String(row.id),
-      organization_id: String(row.organization_id),
-      owner_id: String(row.owner_id),
-      property_id: String(row.property_id),
-      full_name: String(row.full_name),
-      tenant_access_id: String(row.tenant_access_id),
+      id: row.id,
+      organization_id: row.organization_id,
+      owner_id: row.owner_id ?? '',
+      property_id: row.property_id ?? '',
+      full_name: row.full_name,
+      tenant_access_id: row.tenant_access_id,
       monthly_rent: Number(row.monthly_rent ?? 0),
       payment_due_day: Number(row.payment_due_day ?? 1),
       payment_status: row.payment_status as ActiveTenantRow['payment_status'],
-      status: String(row.status),
-      properties: property
-        ? {
-            property_name: property.property_name ?? null,
-            unit_number: property.unit_number ?? null,
-          }
-        : null,
-    } satisfies ActiveTenantRow
+      status: row.status ?? 'active',
+      properties: prop ? { property_name: (prop as { property_name?: string | null }).property_name ?? null, unit_number: (prop as { unit_number?: string | null }).unit_number ?? null } : null,
+    }
   })
+
   const approvedTenantIds = await loadApprovedTenantIds({
-    organizationIds: Array.from(new Set(tenants.map((tenant) => tenant.organization_id))),
-    tenantIds: tenants.map((tenant) => tenant.id),
+    organizationIds: Array.from(new Set(tenants.map((t) => t.organization_id))),
+    tenantIds: tenants.map((t) => t.id),
     cycleYear,
     cycleMonth,
   })
 
-  const ownerIds = Array.from(new Set(tenants.map((tenant) => tenant.owner_id)))
+  const ownerIds = Array.from(new Set(tenants.map((t) => t.owner_id)))
   const [settingsByOwner, ownerCurrencyById] = await Promise.all([
     loadRentChasingSettings(ownerIds),
     loadOwnerCurrencyMap(ownerIds),
@@ -174,44 +124,39 @@ export async function runRentChasing(now = new Date()) {
 
     const nextStatus: 'pending' | 'paid' | 'overdue' = isApproved ? 'paid' : now > dueDate ? 'overdue' : 'pending'
 
-    if (nextStatus === 'paid') {
-      paidCount += 1
-    } else if (nextStatus === 'overdue') {
-      overdueCount += 1
-    } else {
-      pendingCount += 1
-    }
+    if (nextStatus === 'paid') paidCount += 1
+    else if (nextStatus === 'overdue') overdueCount += 1
+    else pendingCount += 1
 
     const amountDue = Number(tenant.monthly_rent ?? 0)
-    await supabaseAdmin.from('rent_ledger').upsert(
-      {
-        organization_id: tenant.organization_id,
-        owner_id: tenant.owner_id,
-        tenant_id: tenant.id,
-        property_id: tenant.property_id,
-        cycle_year: cycleYear,
-        cycle_month: cycleMonth,
-        due_date: dueDateIso,
-        amount_due: amountDue,
-        amount_paid: isApproved ? amountDue : 0,
-        paid_date: isApproved ? now.toISOString().slice(0, 10) : null,
-        status: nextStatus,
-      },
-      {
-        onConflict: 'organization_id,tenant_id,cycle_year,cycle_month',
-      },
-    )
+
+    const existingLedger = await prisma.rent_ledger.findFirst({
+      where: { organization_id: tenant.organization_id, tenant_id: tenant.id, cycle_year: cycleYear, cycle_month: cycleMonth },
+      select: { id: true },
+    })
+
+    const ledgerData = {
+      organization_id: tenant.organization_id,
+      owner_id: tenant.owner_id,
+      tenant_id: tenant.id,
+      property_id: tenant.property_id,
+      cycle_year: cycleYear,
+      cycle_month: cycleMonth,
+      due_date: new Date(dueDateIso),
+      amount_due: amountDue,
+      amount_paid: isApproved ? amountDue : 0,
+      paid_date: isApproved ? new Date(now.toISOString().slice(0, 10)) : null,
+      status: nextStatus,
+    }
+
+    if (existingLedger) {
+      await prisma.rent_ledger.update({ where: { id: existingLedger.id }, data: { ...ledgerData, updated_at: new Date() } })
+    } else {
+      await prisma.rent_ledger.create({ data: ledgerData })
+    }
 
     if (tenant.payment_status !== nextStatus) {
-      const { error: updateError } = await supabaseAdmin
-        .from('tenants')
-        .update({
-          payment_status: nextStatus,
-        })
-        .eq('id', tenant.id)
-        .eq('organization_id', tenant.organization_id)
-
-      throwIfError(updateError, 'Failed to update tenant payment status')
+      await prisma.tenants.update({ where: { id: tenant.id }, data: { payment_status: nextStatus } })
       tenantStatusUpdates += 1
     }
 
@@ -235,25 +180,17 @@ export async function runRentChasing(now = new Date()) {
   const reminderOwnerMap = new Map<string, { ownerId: string; organizationId: string }>()
   for (const tenant of tenants) {
     const enabled = settingsByOwner.get(tenant.owner_id) ?? true
-    if (!enabled) {
-      continue
-    }
+    if (!enabled) continue
 
     const key = `${tenant.organization_id}:${tenant.owner_id}`
     if (!reminderOwnerMap.has(key)) {
-      reminderOwnerMap.set(key, {
-        organizationId: tenant.organization_id,
-        ownerId: tenant.owner_id,
-      })
+      reminderOwnerMap.set(key, { organizationId: tenant.organization_id, ownerId: tenant.owner_id })
     }
   }
 
   let ownersProcessed = 0
   for (const ownerContext of reminderOwnerMap.values()) {
-    await processOwnerReminders({
-      ownerId: ownerContext.ownerId,
-      organizationId: ownerContext.organizationId,
-    })
+    await processOwnerReminders({ ownerId: ownerContext.ownerId, organizationId: ownerContext.organizationId })
     ownersProcessed += 1
   }
 

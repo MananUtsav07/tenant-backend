@@ -1,7 +1,5 @@
-import type { PostgrestError } from '@supabase/supabase-js'
-
 import { AppError } from '../lib/errors.js'
-import { supabaseAdmin } from '../lib/supabase.js'
+import { prisma } from '../lib/db.js'
 import { dispatchAutomationJobs } from './automation/core/dispatcherService.js'
 import { listAutomationJobs, queueAutomationJob, queueEventAutomationJob, queueScheduledAutomationJobs } from './automation/core/jobQueueService.js'
 import { listAutomationRegistryEntries } from './automation/core/registry.js'
@@ -29,12 +27,6 @@ type ListAutomationJobsInput = {
   job_type?: string
   lifecycle_status?: string
   organization_id?: string
-}
-
-function throwIfError(error: PostgrestError | null, message: string): void {
-  if (error) {
-    throw new AppError(message, 500, error.message)
-  }
 }
 
 export async function enqueueAutomationJob(input: {
@@ -85,13 +77,7 @@ export async function enqueueCashFlowRefreshJob(input: {
     ownerId: input.ownerId,
     sourceType: input.sourceType,
     sourceRef: input.sourceRef,
-    payload: {
-      organization_id: input.organizationId,
-      owner_id: input.ownerId,
-      scope: input.scope ?? 'current',
-      year: input.year,
-      month: input.month,
-    },
+    payload: { organization_id: input.organizationId, owner_id: input.ownerId, scope: input.scope ?? 'current', year: input.year, month: input.month },
   })
 }
 
@@ -110,12 +96,7 @@ export async function enqueueMaintenanceFollowUpJob(input: {
     sourceType: 'maintenance_workflow',
     sourceRef: input.workflowId,
     runAt: input.runAt,
-    payload: {
-      workflow_id: input.workflowId,
-      organization_id: input.organizationId,
-      owner_id: input.ownerId,
-      ticket_id: input.ticketId,
-    },
+    payload: { workflow_id: input.workflowId, organization_id: input.organizationId, owner_id: input.ownerId, ticket_id: input.ticketId },
   })
 }
 
@@ -137,17 +118,7 @@ export async function enqueueVacancyCampaignRefreshJob(input: {
     ownerId: input.ownerId,
     sourceType: 'vacancy_campaign',
     sourceRef: input.triggerReference ?? input.propertyId,
-    payload: {
-      organization_id: input.organizationId,
-      owner_id: input.ownerId,
-      property_id: input.propertyId,
-      tenant_id: input.tenantId ?? null,
-      source_type: input.sourceType,
-      expected_vacancy_date: input.expectedVacancyDate,
-      trigger_reference: input.triggerReference ?? null,
-      trigger_notes: input.triggerNotes ?? null,
-      vacancy_state: input.vacancyState,
-    },
+    payload: { organization_id: input.organizationId, owner_id: input.ownerId, property_id: input.propertyId, tenant_id: input.tenantId ?? null, source_type: input.sourceType, expected_vacancy_date: input.expectedVacancyDate, trigger_reference: input.triggerReference ?? null, trigger_notes: input.triggerNotes ?? null, vacancy_state: input.vacancyState },
   })
 }
 
@@ -164,79 +135,45 @@ export async function dispatchPendingAutomationJobs(input?: { limit?: number; no
 }
 
 export async function getAutomationHealth() {
-  const dayAgoIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+  const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000)
 
-  const [
-    queuedResult,
-    runningResult,
-    failedResult,
-    skippedResult,
-    lastRunResult,
-    lastErrorResult,
-    jobsSnapshotResult,
-    runs24hResult,
-    errors24hResult,
-  ] = await Promise.all([
-    supabaseAdmin.from('automation_jobs').select('id', { count: 'exact', head: true }).eq('lifecycle_status', 'queued'),
-    supabaseAdmin.from('automation_jobs').select('id', { count: 'exact', head: true }).eq('lifecycle_status', 'running'),
-    supabaseAdmin.from('automation_jobs').select('id', { count: 'exact', head: true }).eq('lifecycle_status', 'failed'),
-    supabaseAdmin.from('automation_jobs').select('id', { count: 'exact', head: true }).eq('lifecycle_status', 'skipped'),
-    supabaseAdmin
-      .from('automation_runs')
-      .select('id, flow_name, status, completed_at')
-      .order('completed_at', { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-    supabaseAdmin
-      .from('automation_errors')
-      .select('id, flow_name, error_message, created_at')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-    supabaseAdmin.from('automation_jobs').select('job_type, lifecycle_status'),
-    supabaseAdmin.from('automation_runs').select('id', { count: 'exact', head: true }).gte('started_at', dayAgoIso),
-    supabaseAdmin.from('automation_errors').select('id', { count: 'exact', head: true }).gte('created_at', dayAgoIso),
+  const [queuedCount, runningCount, failedCount, skippedCount, lastRun, lastError, jobsSnapshot, runs24h, errors24h] = await Promise.all([
+    prisma.automation_jobs.count({ where: { lifecycle_status: 'queued' } }),
+    prisma.automation_jobs.count({ where: { lifecycle_status: 'running' } }),
+    prisma.automation_jobs.count({ where: { lifecycle_status: 'failed' } }),
+    prisma.automation_jobs.count({ where: { lifecycle_status: 'skipped' } }),
+    prisma.automation_runs.findFirst({ select: { id: true, flow_name: true, status: true, completed_at: true }, orderBy: { completed_at: 'desc' } }),
+    prisma.automation_errors.findFirst({ select: { id: true, flow_name: true, error_message: true, created_at: true }, orderBy: { created_at: 'desc' } }),
+    prisma.automation_jobs.findMany({ select: { job_type: true, lifecycle_status: true } }),
+    prisma.automation_runs.count({ where: { started_at: { gte: dayAgo } } }),
+    prisma.automation_errors.count({ where: { created_at: { gte: dayAgo } } }),
   ])
-
-  throwIfError(queuedResult.error, 'Failed to count queued automation jobs')
-  throwIfError(runningResult.error, 'Failed to count running automation jobs')
-  throwIfError(failedResult.error, 'Failed to count failed automation jobs')
-  throwIfError(skippedResult.error, 'Failed to count skipped automation jobs')
-  throwIfError(lastRunResult.error, 'Failed to load latest automation run')
-  throwIfError(lastErrorResult.error, 'Failed to load latest automation error')
-  throwIfError(jobsSnapshotResult.error, 'Failed to load automation job snapshot')
-  throwIfError(runs24hResult.error, 'Failed to count recent automation runs')
-  throwIfError(errors24hResult.error, 'Failed to count recent automation errors')
 
   const queuedByFlow = new Map<AutomationJobType, { queued: number; running: number; failed: number; skipped: number }>()
   for (const jobType of Object.keys(automationJobCatalog) as AutomationJobType[]) {
     queuedByFlow.set(jobType, { queued: 0, running: 0, failed: 0, skipped: 0 })
   }
 
-  for (const row of jobsSnapshotResult.data ?? []) {
-    const jobType = (row as { job_type?: string }).job_type
-    const lifecycleStatus = (row as { lifecycle_status?: string }).lifecycle_status
-    if (!jobType || !lifecycleStatus || !isAutomationJobType(jobType)) {
-      continue
-    }
+  for (const row of jobsSnapshot) {
+    const jobType = row.job_type
+    const lifecycleStatus = row.lifecycle_status as string | null
+    if (!jobType || !lifecycleStatus || !isAutomationJobType(jobType)) continue
 
-    const aggregate = queuedByFlow.get(jobType)
-    if (!aggregate) {
-      continue
-    }
+    const aggregate = queuedByFlow.get(jobType as AutomationJobType)
+    if (!aggregate) continue
 
     if (lifecycleStatus === 'queued' || lifecycleStatus === 'running' || lifecycleStatus === 'failed' || lifecycleStatus === 'skipped') {
-      aggregate[lifecycleStatus] += 1
+      aggregate[lifecycleStatus as 'queued' | 'running' | 'failed' | 'skipped'] += 1
     }
   }
 
   return {
-    pending_jobs: queuedResult.count ?? 0,
-    processing_jobs: runningResult.count ?? 0,
-    failed_jobs: failedResult.count ?? 0,
-    skipped_jobs: skippedResult.count ?? 0,
-    runs_last_24h: runs24hResult.count ?? 0,
-    errors_last_24h: errors24hResult.count ?? 0,
+    pending_jobs: queuedCount,
+    processing_jobs: runningCount,
+    failed_jobs: failedCount,
+    skipped_jobs: skippedCount,
+    runs_last_24h: runs24h,
+    errors_last_24h: errors24h,
     registered_handlers: listAutomationRegistryEntries().length,
     queued_by_flow: Array.from(queuedByFlow.entries()).map(([jobType, counts]) => ({
       job_type: jobType,
@@ -250,71 +187,40 @@ export async function getAutomationHealth() {
       description: automationJobCatalog[jobType].description,
     })),
     handlers: listAutomationRegistryEntries(),
-    last_run: lastRunResult.data ?? null,
-    last_error: lastErrorResult.data ?? null,
+    last_run: lastRun ?? null,
+    last_error: lastError ?? null,
   }
 }
 
 export async function listAutomationRuns(query: ListAutomationRunsInput) {
-  const from = (query.page - 1) * query.page_size
-  const to = from + query.page_size - 1
+  const skip = (query.page - 1) * query.page_size
 
-  let request = supabaseAdmin
-    .from('automation_runs')
-    .select('id, job_id, organization_id, owner_id, flow_name, status, started_at, completed_at, processed_count, metadata', {
-      count: 'exact',
-    })
-    .order('started_at', { ascending: false })
-    .range(from, to)
+  const where: Record<string, unknown> = {}
+  if (query.flow_name) where.flow_name = query.flow_name
+  if (query.status) where.status = query.status
+  if (query.organization_id) where.organization_id = query.organization_id
 
-  if (query.flow_name) {
-    request = request.eq('flow_name', query.flow_name)
-  }
+  const [items, total] = await prisma.$transaction([
+    prisma.automation_runs.findMany({ select: { id: true, job_id: true, organization_id: true, owner_id: true, flow_name: true, status: true, started_at: true, completed_at: true, processed_count: true, metadata: true }, where, orderBy: { started_at: 'desc' }, skip, take: query.page_size }),
+    prisma.automation_runs.count({ where }),
+  ])
 
-  if (query.status) {
-    request = request.eq('status', query.status)
-  }
-
-  if (query.organization_id) {
-    request = request.eq('organization_id', query.organization_id)
-  }
-
-  const { data, error, count } = await request
-  throwIfError(error, 'Failed to list automation runs')
-
-  return {
-    items: data ?? [],
-    total: count ?? 0,
-  }
+  return { items, total }
 }
 
 export async function listAutomationErrors(query: ListAutomationErrorsInput) {
-  const from = (query.page - 1) * query.page_size
-  const to = from + query.page_size - 1
+  const skip = (query.page - 1) * query.page_size
 
-  let request = supabaseAdmin
-    .from('automation_errors')
-    .select('id, run_id, job_id, organization_id, owner_id, flow_name, error_message, context, created_at', {
-      count: 'exact',
-    })
-    .order('created_at', { ascending: false })
-    .range(from, to)
+  const where: Record<string, unknown> = {}
+  if (query.flow_name) where.flow_name = query.flow_name
+  if (query.organization_id) where.organization_id = query.organization_id
 
-  if (query.flow_name) {
-    request = request.eq('flow_name', query.flow_name)
-  }
+  const [items, total] = await prisma.$transaction([
+    prisma.automation_errors.findMany({ select: { id: true, run_id: true, job_id: true, organization_id: true, owner_id: true, flow_name: true, error_message: true, context: true, created_at: true }, where, orderBy: { created_at: 'desc' }, skip, take: query.page_size }),
+    prisma.automation_errors.count({ where }),
+  ])
 
-  if (query.organization_id) {
-    request = request.eq('organization_id', query.organization_id)
-  }
-
-  const { data, error, count } = await request
-  throwIfError(error, 'Failed to list automation errors')
-
-  return {
-    items: data ?? [],
-    total: count ?? 0,
-  }
+  return { items, total }
 }
 
 export async function listQueuedAutomationJobs(query: ListAutomationJobsInput) {

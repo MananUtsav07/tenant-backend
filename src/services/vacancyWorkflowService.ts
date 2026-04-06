@@ -1,7 +1,5 @@
-import type { PostgrestError } from '@supabase/supabase-js'
-
 import { AppError } from '../lib/errors.js'
-import { supabaseAdmin } from '../lib/supabase.js'
+import { prisma } from '../lib/db.js'
 import { getOwnerAutomationSettings } from './ownerAutomationService.js'
 import { createOwnerNotification } from './ownerService.js'
 import { getAutomationProviderRegistry } from './automation/providers/providerRegistry.js'
@@ -227,10 +225,12 @@ const vacancyNoticePhrases = [
   'ending my lease',
 ]
 
-function throwIfError(error: PostgrestError | null, message: string): void {
-  if (error) {
-    throw new AppError(message, 500, error.message)
-  }
+function toISO(d: Date | null | undefined): string | null {
+  return d ? d.toISOString() : null
+}
+
+function toISODate(d: Date | null | undefined): string | null {
+  return d ? d.toISOString().slice(0, 10) : null
 }
 
 function startOfUtcDay(value: Date) {
@@ -383,48 +383,61 @@ async function generateListingDraft(input: {
   }
 }
 async function loadPropertyContext(organizationId: string, propertyId: string) {
-  const { data, error } = await supabaseAdmin
-    .from('properties')
-    .select('id, organization_id, owner_id, property_name, address, unit_number, occupancy_status, expected_vacancy_date')
-    .eq('organization_id', organizationId)
-    .eq('id', propertyId)
-    .maybeSingle()
-
-  throwIfError(error, 'Failed to load property for vacancy workflow')
-  return (data as PropertyContextRow | null) ?? null
+  const data = await prisma.properties.findFirst({
+    select: { id: true, organization_id: true, owner_id: true, property_name: true, address: true, unit_number: true, occupancy_status: true, expected_vacancy_date: true },
+    where: { organization_id: organizationId, id: propertyId },
+  })
+  if (!data) return null
+  return { ...data, expected_vacancy_date: toISODate(data.expected_vacancy_date as Date | null) } as PropertyContextRow
 }
 
 async function loadTenantContext(input: { organizationId: string; propertyId: string; tenantId?: string | null }) {
-  let request = supabaseAdmin
-    .from('tenants')
-    .select('id, organization_id, owner_id, property_id, full_name, email, phone, lease_end_date, monthly_rent, status')
-    .eq('organization_id', input.organizationId)
-    .eq('property_id', input.propertyId)
-
+  const where: Record<string, unknown> = { organization_id: input.organizationId, property_id: input.propertyId }
   if (input.tenantId) {
-    request = request.eq('id', input.tenantId)
+    where.id = input.tenantId
   } else {
-    request = request.eq('status', 'active').order('lease_end_date', { ascending: true, nullsFirst: false }).limit(1)
+    where.status = 'active'
   }
 
-  const { data, error } = await request.maybeSingle()
-  throwIfError(error, 'Failed to load tenant for vacancy workflow')
-  return (data as TenantContextRow | null) ?? null
+  const data = await prisma.tenants.findFirst({
+    select: { id: true, organization_id: true, owner_id: true, property_id: true, full_name: true, email: true, phone: true, lease_end_date: true, monthly_rent: true, status: true },
+    where,
+    orderBy: input.tenantId ? undefined : { lease_end_date: 'asc' },
+  })
+  if (!data) return null
+  return {
+    ...data,
+    monthly_rent: Number(data.monthly_rent ?? 0),
+    lease_end_date: toISODate(data.lease_end_date as Date | null),
+  } as TenantContextRow
 }
 
 async function loadActiveVacancyCampaignForProperty(input: { organizationId: string; propertyId: string }) {
-  const { data, error } = await supabaseAdmin
-    .from('vacancy_campaigns')
-    .select('*')
-    .eq('organization_id', input.organizationId)
-    .eq('property_id', input.propertyId)
-    .in('campaign_status', activeVacancyCampaignStatuses)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
+  const data = await prisma.vacancy_campaigns.findFirst({
+    where: { organization_id: input.organizationId, property_id: input.propertyId, campaign_status: { in: activeVacancyCampaignStatuses } },
+    orderBy: { created_at: 'desc' },
+  })
+  if (!data) return null
+  return serializeVacancyCampaignRow(data as unknown as Record<string, unknown>) as VacancyCampaignRow
+}
 
-  throwIfError(error, 'Failed to load active vacancy campaign')
-  return (data as VacancyCampaignRow | null) ?? null
+function serializeVacancyCampaignRow(row: Record<string, unknown>): VacancyCampaignRow {
+  const tenants = row.tenants as Record<string, unknown> | null
+  const properties = row.properties as Record<string, unknown> | null
+  return {
+    ...(row as VacancyCampaignRow),
+    expected_vacancy_date: toISODate(row.expected_vacancy_date as Date | null) ?? '',
+    actual_vacancy_date: toISODate(row.actual_vacancy_date as Date | null),
+    draft_generated_at: toISO(row.draft_generated_at as Date | null),
+    owner_approved_at: toISO(row.owner_approved_at as Date | null),
+    last_status_digest_at: toISO(row.last_status_digest_at as Date | null),
+    created_at: toISO(row.created_at as Date) ?? '',
+    updated_at: toISO(row.updated_at as Date) ?? '',
+    tenants: tenants ? { ...tenants, lease_end_date: toISODate(tenants.lease_end_date as Date | null), monthly_rent: Number(tenants.monthly_rent ?? 0) } as TenantContextRow : null,
+    properties: properties ? { ...properties, expected_vacancy_date: toISODate(properties.expected_vacancy_date as Date | null) } as PropertyContextRow : null,
+    owners: row.owners_vacancy_campaigns_owner_idToowners as VacancyCampaignRow['owners'] | null ?? (row.owners as VacancyCampaignRow['owners'] | null),
+    organizations: row.organizations as VacancyCampaignRow['organizations'] | null,
+  }
 }
 
 async function createVacancyCampaignEvent(input: {
@@ -435,21 +448,17 @@ async function createVacancyCampaignEvent(input: {
   message: string
   metadata?: Record<string, unknown>
 }) {
-  const { data, error } = await supabaseAdmin
-    .from('vacancy_campaign_events')
-    .insert({
+  const created = await prisma.vacancy_campaign_events.create({
+    data: {
       organization_id: input.organizationId,
       vacancy_campaign_id: input.campaignId,
       event_type: input.eventType,
       title: input.title,
       message: input.message,
-      metadata: input.metadata ?? {},
-    })
-    .select('*')
-    .single()
-
-  throwIfError(error, 'Failed to create vacancy campaign event')
-  return data as VacancyCampaignEventRow
+      metadata: (input.metadata ?? {}) as object,
+    },
+  })
+  return { ...created, created_at: toISO(created.created_at) ?? '' } as unknown as VacancyCampaignEventRow
 }
 
 async function updatePropertyVacancyState(input: {
@@ -460,27 +469,19 @@ async function updatePropertyVacancyState(input: {
   vacancyMarkedAt?: string | null
   availabilityNotes?: string | null
 }) {
-  const patch: Record<string, unknown> = {
-    occupancy_status: input.occupancyStatus,
-  }
+  const patchData: Record<string, unknown> = { occupancy_status: input.occupancyStatus, updated_at: new Date() }
 
   if (typeof input.expectedVacancyDate !== 'undefined') {
-    patch.expected_vacancy_date = input.expectedVacancyDate
+    patchData.expected_vacancy_date = input.expectedVacancyDate ? new Date(`${input.expectedVacancyDate}T00:00:00.000Z`) : null
   }
   if (typeof input.vacancyMarkedAt !== 'undefined') {
-    patch.vacancy_marked_at = input.vacancyMarkedAt
+    patchData.vacancy_marked_at = input.vacancyMarkedAt
   }
   if (typeof input.availabilityNotes !== 'undefined') {
-    patch.availability_notes = input.availabilityNotes
+    patchData.availability_notes = input.availabilityNotes
   }
 
-  const { error } = await supabaseAdmin
-    .from('properties')
-    .update(patch)
-    .eq('organization_id', input.organizationId)
-    .eq('id', input.propertyId)
-
-  throwIfError(error, 'Failed to update property vacancy state')
+  await prisma.properties.update({ where: { id: input.propertyId }, data: patchData })
 }
 
 function groupByCampaignId<T extends { vacancy_campaign_id: string }>(rows: T[]) {
@@ -503,39 +504,34 @@ async function loadVacancyCampaignRelations(campaignIds: string[]) {
     }
   }
 
-  const [eventsResult, leadsResult, viewingsResult, applicationsResult] = await Promise.all([
-    supabaseAdmin
-      .from('vacancy_campaign_events')
-      .select('id, vacancy_campaign_id, event_type, title, message, metadata, created_at')
-      .in('vacancy_campaign_id', campaignIds)
-      .order('created_at', { ascending: false }),
-    supabaseAdmin
-      .from('vacancy_leads')
-      .select('id, vacancy_campaign_id, property_id, owner_id, full_name, email, phone, source, status, notes, created_at, updated_at')
-      .in('vacancy_campaign_id', campaignIds)
-      .order('created_at', { ascending: false }),
-    supabaseAdmin
-      .from('vacancy_viewings')
-      .select('id, vacancy_campaign_id, property_id, owner_id, lead_id, scheduled_start_at, scheduled_end_at, booking_status, notes, calendar_event_id, created_at, updated_at')
-      .in('vacancy_campaign_id', campaignIds)
-      .order('scheduled_start_at', { ascending: true }),
-    supabaseAdmin
-      .from('vacancy_applications')
-      .select('id, vacancy_campaign_id, property_id, owner_id, lead_id, applicant_name, desired_move_in_date, monthly_salary, status, notes, created_at, updated_at')
-      .in('vacancy_campaign_id', campaignIds)
-      .order('created_at', { ascending: false }),
+  const [events, leads, viewings, applications] = await Promise.all([
+    prisma.vacancy_campaign_events.findMany({
+      select: { id: true, vacancy_campaign_id: true, event_type: true, title: true, message: true, metadata: true, created_at: true },
+      where: { vacancy_campaign_id: { in: campaignIds } },
+      orderBy: { created_at: 'desc' },
+    }),
+    prisma.vacancy_leads.findMany({
+      select: { id: true, vacancy_campaign_id: true, property_id: true, owner_id: true, full_name: true, email: true, phone: true, source: true, status: true, notes: true, created_at: true, updated_at: true },
+      where: { vacancy_campaign_id: { in: campaignIds } },
+      orderBy: { created_at: 'desc' },
+    }),
+    prisma.vacancy_viewings.findMany({
+      select: { id: true, vacancy_campaign_id: true, property_id: true, owner_id: true, lead_id: true, scheduled_start_at: true, scheduled_end_at: true, booking_status: true, notes: true, calendar_event_id: true, created_at: true, updated_at: true },
+      where: { vacancy_campaign_id: { in: campaignIds } },
+      orderBy: { scheduled_start_at: 'asc' },
+    }),
+    prisma.vacancy_applications.findMany({
+      select: { id: true, vacancy_campaign_id: true, property_id: true, owner_id: true, lead_id: true, applicant_name: true, desired_move_in_date: true, monthly_salary: true, status: true, notes: true, created_at: true, updated_at: true },
+      where: { vacancy_campaign_id: { in: campaignIds } },
+      orderBy: { created_at: 'desc' },
+    }),
   ])
 
-  throwIfError(eventsResult.error, 'Failed to load vacancy campaign events')
-  throwIfError(leadsResult.error, 'Failed to load vacancy campaign leads')
-  throwIfError(viewingsResult.error, 'Failed to load vacancy campaign viewings')
-  throwIfError(applicationsResult.error, 'Failed to load vacancy campaign applications')
-
   return {
-    eventsByCampaign: groupByCampaignId((eventsResult.data ?? []) as VacancyCampaignEventRow[]),
-    leadsByCampaign: groupByCampaignId((leadsResult.data ?? []) as VacancyLeadRow[]),
-    viewingsByCampaign: groupByCampaignId((viewingsResult.data ?? []) as VacancyViewingRow[]),
-    applicationsByCampaign: groupByCampaignId((applicationsResult.data ?? []) as VacancyApplicationRow[]),
+    eventsByCampaign: groupByCampaignId(events.map((e) => ({ ...e, created_at: toISO(e.created_at) ?? '', metadata: e.metadata as Record<string, unknown> })) as VacancyCampaignEventRow[]),
+    leadsByCampaign: groupByCampaignId(leads.map((l) => ({ ...l, created_at: toISO(l.created_at) ?? '', updated_at: toISO(l.updated_at) ?? '' })) as VacancyLeadRow[]),
+    viewingsByCampaign: groupByCampaignId(viewings.map((v) => ({ ...v, scheduled_start_at: toISO(v.scheduled_start_at) ?? '', scheduled_end_at: toISO(v.scheduled_end_at as Date | null), created_at: toISO(v.created_at) ?? '', updated_at: toISO(v.updated_at) ?? '' })) as VacancyViewingRow[]),
+    applicationsByCampaign: groupByCampaignId(applications.map((a) => ({ ...a, desired_move_in_date: toISODate(a.desired_move_in_date as Date | null), monthly_salary: a.monthly_salary != null ? Number(a.monthly_salary) : null, created_at: toISO(a.created_at) ?? '', updated_at: toISO(a.updated_at) ?? '' })) as VacancyApplicationRow[]),
   }
 }
 
@@ -599,28 +595,23 @@ async function loadVacancyCampaignOverviewRows(input: {
   propertyId?: string
   includeAdminContext?: boolean
 }) {
-  const selectClause = input.includeAdminContext
-    ? 'id, organization_id, owner_id, property_id, tenant_id, source_type, campaign_status, vacancy_state, expected_vacancy_date, actual_vacancy_date, trigger_reference, trigger_notes, listing_title, listing_description, listing_features, availability_label, draft_source, draft_generation_status, draft_generated_at, owner_approved_at, approved_by_owner_id, listing_sync_status, listing_provider, listing_external_id, listing_url, enquiry_count, scheduled_viewings_count, applications_count, last_status_digest_at, created_at, updated_at, properties(id, organization_id, owner_id, property_name, address, unit_number, occupancy_status, expected_vacancy_date), tenants(id, organization_id, owner_id, property_id, full_name, email, phone, lease_end_date, monthly_rent, status), owners(full_name, company_name, email), organizations(name, slug)'
-    : 'id, organization_id, owner_id, property_id, tenant_id, source_type, campaign_status, vacancy_state, expected_vacancy_date, actual_vacancy_date, trigger_reference, trigger_notes, listing_title, listing_description, listing_features, availability_label, draft_source, draft_generation_status, draft_generated_at, owner_approved_at, approved_by_owner_id, listing_sync_status, listing_provider, listing_external_id, listing_url, enquiry_count, scheduled_viewings_count, applications_count, last_status_digest_at, created_at, updated_at, properties(id, organization_id, owner_id, property_name, address, unit_number, occupancy_status, expected_vacancy_date), tenants(id, organization_id, owner_id, property_id, full_name, email, phone, lease_end_date, monthly_rent, status)'
-  let request = supabaseAdmin
-    .from('vacancy_campaigns')
-    .select(selectClause)
-    .eq('organization_id', input.organizationId)
-    .order('created_at', { ascending: false })
+  const where: Record<string, unknown> = { organization_id: input.organizationId }
+  if (input.ownerId) where.owner_id = input.ownerId
+  if (input.campaignId) where.id = input.campaignId
+  if (input.propertyId) where.property_id = input.propertyId
 
-  if (input.ownerId) {
-    request = request.eq('owner_id', input.ownerId)
-  }
-  if (input.campaignId) {
-    request = request.eq('id', input.campaignId)
-  }
-  if (input.propertyId) {
-    request = request.eq('property_id', input.propertyId)
-  }
-
-  const { data, error } = await request
-  throwIfError(error, 'Failed to load vacancy campaigns')
-  return (data ?? []) as unknown as VacancyCampaignRow[]
+  const rows = await prisma.vacancy_campaigns.findMany({
+    select: {
+      id: true, organization_id: true, owner_id: true, property_id: true, tenant_id: true, source_type: true, campaign_status: true, vacancy_state: true, expected_vacancy_date: true, actual_vacancy_date: true, trigger_reference: true, trigger_notes: true, listing_title: true, listing_description: true, listing_features: true, availability_label: true, draft_source: true, draft_generation_status: true, draft_generated_at: true, owner_approved_at: true, approved_by_owner_id: true, listing_sync_status: true, listing_provider: true, listing_external_id: true, listing_url: true, enquiry_count: true, scheduled_viewings_count: true, applications_count: true, last_status_digest_at: true, created_at: true, updated_at: true,
+      properties: { select: { id: true, organization_id: true, owner_id: true, property_name: true, address: true, unit_number: true, occupancy_status: true, expected_vacancy_date: true } },
+      tenants: { select: { id: true, organization_id: true, owner_id: true, property_id: true, full_name: true, email: true, phone: true, lease_end_date: true, monthly_rent: true, status: true } },
+      owners_vacancy_campaigns_owner_idToowners: { select: { full_name: true, company_name: true, email: true } },
+      organizations: { select: { name: true, slug: true } },
+    },
+    where,
+    orderBy: { created_at: 'desc' },
+  })
+  return rows.map((row) => serializeVacancyCampaignRow(row as unknown as Record<string, unknown>))
 }
 
 async function loadVacancyCampaignDetail(input: { organizationId: string; campaignId: string; ownerId?: string; includeAdminContext?: boolean }) {
@@ -641,27 +632,20 @@ async function loadVacancyCampaignDetail(input: { organizationId: string; campai
 }
 
 async function refreshVacancyCampaignCounts(input: { organizationId: string; campaignId: string }) {
-  const [leadCountResult, viewingCountResult, applicationCountResult] = await Promise.all([
-    supabaseAdmin.from('vacancy_leads').select('id', { count: 'exact', head: true }).eq('organization_id', input.organizationId).eq('vacancy_campaign_id', input.campaignId),
-    supabaseAdmin.from('vacancy_viewings').select('id', { count: 'exact', head: true }).eq('organization_id', input.organizationId).eq('vacancy_campaign_id', input.campaignId).eq('booking_status', 'scheduled'),
-    supabaseAdmin.from('vacancy_applications').select('id', { count: 'exact', head: true }).eq('organization_id', input.organizationId).eq('vacancy_campaign_id', input.campaignId),
+  const [leadCount, viewingCount, applicationCount] = await Promise.all([
+    prisma.vacancy_leads.count({ where: { organization_id: input.organizationId, vacancy_campaign_id: input.campaignId } }),
+    prisma.vacancy_viewings.count({ where: { organization_id: input.organizationId, vacancy_campaign_id: input.campaignId, booking_status: 'scheduled' } }),
+    prisma.vacancy_applications.count({ where: { organization_id: input.organizationId, vacancy_campaign_id: input.campaignId } }),
   ])
 
-  throwIfError(leadCountResult.error, 'Failed to count vacancy leads')
-  throwIfError(viewingCountResult.error, 'Failed to count vacancy viewings')
-  throwIfError(applicationCountResult.error, 'Failed to count vacancy applications')
-
-  const { error } = await supabaseAdmin
-    .from('vacancy_campaigns')
-    .update({
-      enquiry_count: leadCountResult.count ?? 0,
-      scheduled_viewings_count: viewingCountResult.count ?? 0,
-      applications_count: applicationCountResult.count ?? 0,
-    })
-    .eq('organization_id', input.organizationId)
-    .eq('id', input.campaignId)
-
-  throwIfError(error, 'Failed to refresh vacancy campaign counters')
+  await prisma.vacancy_campaigns.updateMany({
+    where: { organization_id: input.organizationId, id: input.campaignId },
+    data: {
+      enquiry_count: leadCount,
+      scheduled_viewings_count: viewingCount,
+      applications_count: applicationCount,
+    },
+  })
 }
 
 function pickExpectedVacancyDate(input: {
@@ -867,9 +851,8 @@ export async function createOrRefreshVacancyCampaign(input: {
   const created = !existingCampaign
 
   if (!existingCampaign) {
-    const { data, error } = await supabaseAdmin
-      .from('vacancy_campaigns')
-      .insert({
+    const newCampaign = await prisma.vacancy_campaigns.create({
+      data: {
         organization_id: input.organizationId,
         owner_id: input.ownerId,
         property_id: input.propertyId,
@@ -877,8 +860,8 @@ export async function createOrRefreshVacancyCampaign(input: {
         source_type: input.sourceType,
         campaign_status: 'owner_review',
         vacancy_state: vacancyState,
-        expected_vacancy_date: input.expectedVacancyDate,
-        actual_vacancy_date: vacancyState === 'vacant' ? input.expectedVacancyDate : null,
+        expected_vacancy_date: new Date(`${input.expectedVacancyDate}T00:00:00.000Z`),
+        actual_vacancy_date: vacancyState === 'vacant' ? new Date(`${input.expectedVacancyDate}T00:00:00.000Z`) : null,
         trigger_reference: input.triggerReference ?? null,
         trigger_notes: input.triggerNotes ?? null,
         listing_title: listingDraft.title,
@@ -887,16 +870,15 @@ export async function createOrRefreshVacancyCampaign(input: {
         availability_label: listingDraft.availabilityLabel,
         draft_source: listingDraft.source,
         draft_generation_status: listingDraft.generationStatus,
-        draft_generated_at: now.toISOString(),
-      })
-      .select('id')
-      .single()
+        draft_generated_at: now,
+      },
+      select: { id: true },
+    })
 
-    throwIfError(error, 'Failed to create vacancy campaign')
-    if (!data?.id) {
+    if (!newCampaign?.id) {
       throw new AppError('Vacancy campaign id was not returned after creation', 500)
     }
-    campaignId = data.id as string
+    campaignId = newCampaign.id as string
 
     await createVacancyCampaignEvent({
       organizationId: input.organizationId,
@@ -933,13 +915,13 @@ export async function createOrRefreshVacancyCampaign(input: {
       draftPatch.availability_label = listingDraft.availabilityLabel
     }
 
-    const { error } = await supabaseAdmin
-      .from('vacancy_campaigns')
-      .update(draftPatch)
-      .eq('organization_id', input.organizationId)
-      .eq('id', existingCampaign.id)
-
-    throwIfError(error, 'Failed to refresh vacancy campaign')
+    await prisma.vacancy_campaigns.updateMany({
+      where: { organization_id: input.organizationId, id: existingCampaign.id },
+      data: {
+        ...draftPatch,
+        expected_vacancy_date: new Date(`${input.expectedVacancyDate}T00:00:00.000Z`),
+      },
+    })
     campaignId = existingCampaign.id
   }
 
@@ -1043,14 +1025,13 @@ export async function updateVacancyCampaignDraft(input: {
     patch.listing_features = input.patch.listing_features
   }
 
-  const { error } = await supabaseAdmin
-    .from('vacancy_campaigns')
-    .update(patch)
-    .eq('organization_id', input.organizationId)
-    .eq('owner_id', input.ownerId)
-    .eq('id', input.campaignId)
-
-  throwIfError(error, 'Failed to update vacancy campaign draft')
+  await prisma.vacancy_campaigns.updateMany({
+    where: { organization_id: input.organizationId, owner_id: input.ownerId, id: input.campaignId },
+    data: {
+      ...patch,
+      ...(patch.expected_vacancy_date ? { expected_vacancy_date: new Date(`${patch.expected_vacancy_date}T00:00:00.000Z`) } : {}),
+    },
+  })
 
   if (input.patch.expected_vacancy_date || input.patch.vacancy_state) {
     await updatePropertyVacancyState({
@@ -1131,27 +1112,23 @@ export async function approveVacancyCampaign(input: {
   const listingUrl = typeof publishResult.url === 'string' ? publishResult.url : null
   const listingId = typeof publishResult.listingId === 'string' ? publishResult.listingId : null
 
-  const { error } = await supabaseAdmin
-    .from('vacancy_campaigns')
-    .update({
+  await prisma.vacancy_campaigns.updateMany({
+    where: { organization_id: input.organizationId, owner_id: input.ownerId, id: input.campaignId },
+    data: {
       listing_title: listingTitle,
       listing_description: listingDescription,
       listing_features: listingFeatures,
       availability_label: availabilityLabel,
       campaign_status: listingStatus.campaignStatus,
       vacancy_state: listingStatus.campaignStatus === 'listed' || listingStatus.campaignStatus === 'relisting_in_progress' ? 'relisting_in_progress' : current.vacancy_state,
-      owner_approved_at: now.toISOString(),
+      owner_approved_at: now,
       approved_by_owner_id: input.ownerId,
       listing_sync_status: listingStatus.listingSyncStatus,
       listing_provider: publishResult.provider,
       listing_external_id: listingId,
       listing_url: listingUrl,
-    })
-    .eq('organization_id', input.organizationId)
-    .eq('owner_id', input.ownerId)
-    .eq('id', input.campaignId)
-
-  throwIfError(error, 'Failed to approve vacancy campaign')
+    },
+  })
 
   await updatePropertyVacancyState({
     organizationId: input.organizationId,
@@ -1222,9 +1199,8 @@ export async function addVacancyLead(input: {
     throw new AppError('Vacancy campaign not found in your organization', 404)
   }
 
-  const { data, error } = await supabaseAdmin
-    .from('vacancy_leads')
-    .insert({
+  const newLead = await prisma.vacancy_leads.create({
+    data: {
       organization_id: input.organizationId,
       vacancy_campaign_id: input.campaignId,
       property_id: campaign.property_id,
@@ -1235,11 +1211,8 @@ export async function addVacancyLead(input: {
       source: input.payload.source,
       status: input.payload.status,
       notes: input.payload.notes ?? null,
-    })
-    .select('*')
-    .single()
-
-  throwIfError(error, 'Failed to create vacancy lead')
+    },
+  })
 
   await refreshVacancyCampaignCounts({ organizationId: input.organizationId, campaignId: input.campaignId })
   await createVacancyCampaignEvent({
@@ -1249,9 +1222,9 @@ export async function addVacancyLead(input: {
     title: 'New enquiry recorded',
     message: `${input.payload.full_name} was added to the vacancy campaign pipeline.`,
     metadata: {
-      lead_id: data.id,
-      status: data.status,
-      source: data.source,
+      lead_id: newLead.id,
+      status: newLead.status,
+      source: newLead.source,
     },
   })
 
@@ -1302,24 +1275,20 @@ export async function addVacancyViewing(input: {
     },
   })
 
-  const { data, error } = await supabaseAdmin
-    .from('vacancy_viewings')
-    .insert({
+  const newViewing = await prisma.vacancy_viewings.create({
+    data: {
       organization_id: input.organizationId,
       vacancy_campaign_id: input.campaignId,
       property_id: campaign.property_id,
       owner_id: input.ownerId,
       lead_id: input.payload.lead_id ?? null,
-      scheduled_start_at: input.payload.scheduled_start_at,
-      scheduled_end_at: input.payload.scheduled_end_at ?? null,
+      scheduled_start_at: new Date(input.payload.scheduled_start_at),
+      scheduled_end_at: input.payload.scheduled_end_at ? new Date(input.payload.scheduled_end_at) : null,
       booking_status: input.payload.booking_status,
       notes: input.payload.notes ?? null,
       calendar_event_id: (calendarResult as { eventId?: string | null }).eventId ?? null,
-    })
-    .select('*')
-    .single()
-
-  throwIfError(error, 'Failed to create vacancy viewing')
+    },
+  })
 
   await refreshVacancyCampaignCounts({ organizationId: input.organizationId, campaignId: input.campaignId })
   await createVacancyCampaignEvent({
@@ -1329,7 +1298,7 @@ export async function addVacancyViewing(input: {
     title: 'Viewing scheduled',
     message: `A viewing was scheduled for ${input.payload.scheduled_start_at}.`,
     metadata: {
-      viewing_id: data.id,
+      viewing_id: newViewing.id,
       calendar_provider_status: calendarResult.status,
       calendar_provider: calendarResult.provider,
       calendar_event_id: (calendarResult as { eventId?: string | null }).eventId ?? null,
@@ -1370,37 +1339,28 @@ export async function addVacancyApplication(input: {
     throw new AppError('Vacancy campaign not found in your organization', 404)
   }
 
-  const { data, error } = await supabaseAdmin
-    .from('vacancy_applications')
-    .insert({
+  const newApplication = await prisma.vacancy_applications.create({
+    data: {
       organization_id: input.organizationId,
       vacancy_campaign_id: input.campaignId,
       property_id: campaign.property_id,
       owner_id: input.ownerId,
       lead_id: input.payload.lead_id ?? null,
       applicant_name: input.payload.applicant_name,
-      desired_move_in_date: input.payload.desired_move_in_date ?? null,
+      desired_move_in_date: input.payload.desired_move_in_date ? new Date(input.payload.desired_move_in_date) : null,
       monthly_salary: input.payload.monthly_salary ?? null,
       status: input.payload.status,
       notes: input.payload.notes ?? null,
-    })
-    .select('*')
-    .single()
-
-  throwIfError(error, 'Failed to create vacancy application')
+    },
+  })
 
   await refreshVacancyCampaignCounts({ organizationId: input.organizationId, campaignId: input.campaignId })
 
   if (input.payload.status === 'approved') {
-    const { error: campaignError } = await supabaseAdmin
-      .from('vacancy_campaigns')
-      .update({
-        campaign_status: 'leased',
-      })
-      .eq('organization_id', input.organizationId)
-      .eq('id', input.campaignId)
-
-    throwIfError(campaignError, 'Failed to mark vacancy campaign as leased')
+    await prisma.vacancy_campaigns.updateMany({
+      where: { organization_id: input.organizationId, id: input.campaignId },
+      data: { campaign_status: 'leased' },
+    })
 
     await updatePropertyVacancyState({
       organizationId: input.organizationId,
@@ -1418,9 +1378,9 @@ export async function addVacancyApplication(input: {
     title: 'Application recorded',
     message: `${input.payload.applicant_name} was added to the application pipeline.`,
     metadata: {
-      application_id: data.id,
-      status: data.status,
-      desired_move_in_date: data.desired_move_in_date,
+      application_id: newApplication.id,
+      status: newApplication.status,
+      desired_move_in_date: toISODate(newApplication.desired_move_in_date as Date | null),
     },
   })
 
@@ -1468,22 +1428,20 @@ export async function getOwnerVacancyCampaignDetail(ownerId: string, organizatio
 }
 
 export async function getAdminVacancyCampaignOverview(input: { organizationId?: string }): Promise<AdminVacancyCampaignOverview> {
-  let request = supabaseAdmin
-    .from('vacancy_campaigns')
-    .select(
-      'id, organization_id, owner_id, property_id, tenant_id, source_type, campaign_status, vacancy_state, expected_vacancy_date, actual_vacancy_date, trigger_reference, trigger_notes, listing_title, listing_description, listing_features, availability_label, draft_source, draft_generation_status, draft_generated_at, owner_approved_at, approved_by_owner_id, listing_sync_status, listing_provider, listing_external_id, listing_url, enquiry_count, scheduled_viewings_count, applications_count, last_status_digest_at, created_at, updated_at, properties(id, organization_id, owner_id, property_name, address, unit_number, occupancy_status, expected_vacancy_date), tenants(id, organization_id, owner_id, property_id, full_name, email, phone, lease_end_date, monthly_rent, status), owners(full_name, company_name, email), organizations(name, slug)'
-    )
-    .order('created_at', { ascending: false })
-    .limit(20)
+  const rawRows = await prisma.vacancy_campaigns.findMany({
+    select: {
+      id: true, organization_id: true, owner_id: true, property_id: true, tenant_id: true, source_type: true, campaign_status: true, vacancy_state: true, expected_vacancy_date: true, actual_vacancy_date: true, trigger_reference: true, trigger_notes: true, listing_title: true, listing_description: true, listing_features: true, availability_label: true, draft_source: true, draft_generation_status: true, draft_generated_at: true, owner_approved_at: true, approved_by_owner_id: true, listing_sync_status: true, listing_provider: true, listing_external_id: true, listing_url: true, enquiry_count: true, scheduled_viewings_count: true, applications_count: true, last_status_digest_at: true, created_at: true, updated_at: true,
+      properties: { select: { id: true, organization_id: true, owner_id: true, property_name: true, address: true, unit_number: true, occupancy_status: true, expected_vacancy_date: true } },
+      tenants: { select: { id: true, organization_id: true, owner_id: true, property_id: true, full_name: true, email: true, phone: true, lease_end_date: true, monthly_rent: true, status: true } },
+      owners_vacancy_campaigns_owner_idToowners: { select: { full_name: true, company_name: true, email: true } },
+      organizations: { select: { name: true, slug: true } },
+    },
+    where: input.organizationId ? { organization_id: input.organizationId } : undefined,
+    orderBy: { created_at: 'desc' },
+    take: 20,
+  })
 
-  if (input.organizationId) {
-    request = request.eq('organization_id', input.organizationId)
-  }
-
-  const { data, error } = await request
-  throwIfError(error, 'Failed to load admin vacancy campaign overview')
-
-  const rows = (data ?? []) as unknown as VacancyCampaignRow[]
+  const rows = rawRows.map((row) => serializeVacancyCampaignRow(row as unknown as Record<string, unknown>))
   const relations = await loadVacancyCampaignRelations(rows.map((row) => row.id))
   const campaigns = rows.map((row) => mapVacancyCampaignOverview(row, relations))
 
@@ -1572,18 +1530,13 @@ async function buildDailyVacancyStatusDigest(ownerId: string, organizationId: st
     },
   })
 
-  const nowIso = new Date().toISOString()
+  const nowTs = new Date()
   const campaignIds = activeCampaigns.map((campaign) => campaign.id)
 
-  const { error } = await supabaseAdmin
-    .from('vacancy_campaigns')
-    .update({
-      last_status_digest_at: nowIso,
-    })
-    .eq('organization_id', organizationId)
-    .in('id', campaignIds)
-
-  throwIfError(error, 'Failed to mark vacancy campaigns as included in daily digest')
+  await prisma.vacancy_campaigns.updateMany({
+    where: { organization_id: organizationId, id: { in: campaignIds } },
+    data: { last_status_digest_at: nowTs },
+  })
 
   await Promise.all(
     campaignIds.map((campaignId) =>
@@ -1610,30 +1563,26 @@ async function detectLeaseExpiryVacancyCandidates(now: Date) {
   const horizonKey = toIsoDate(addDays(now, 90))
   const fallbackHorizonKey = toIsoDate(addDays(now, 30))
 
-  const [legalResult, tenantResult, renewedResult] = await Promise.all([
-    supabaseAdmin
-      .from('legal_dates')
-      .select('organization_id, owner_id, property_id, tenant_id, contract_end, renewal_status')
-      .not('contract_end', 'is', null)
-      .in('renewal_status', ['not_renewed', 'vacating'])
-      .gte('contract_end', todayKey)
-      .lte('contract_end', horizonKey),
-    supabaseAdmin
-      .from('tenants')
-      .select('id, organization_id, owner_id, property_id, lease_end_date, status')
-      .eq('status', 'active')
-      .not('lease_end_date', 'is', null)
-      .gte('lease_end_date', todayKey)
-      .lte('lease_end_date', fallbackHorizonKey),
-    supabaseAdmin
-      .from('legal_dates')
-      .select('tenant_id, property_id')
-      .eq('renewal_status', 'renewed'),
+  const [legalRows, tenantRows, renewedRows] = await Promise.all([
+    prisma.legal_dates.findMany({
+      select: { organization_id: true, owner_id: true, property_id: true, tenant_id: true, contract_end: true, renewal_status: true },
+      where: {
+        contract_end: { not: null, gte: new Date(`${todayKey}T00:00:00.000Z`), lte: new Date(`${horizonKey}T00:00:00.000Z`) },
+        renewal_status: { in: ['not_renewed', 'vacating'] },
+      },
+    }),
+    prisma.tenants.findMany({
+      select: { id: true, organization_id: true, owner_id: true, property_id: true, lease_end_date: true, status: true },
+      where: {
+        status: 'active',
+        lease_end_date: { not: null, gte: new Date(`${todayKey}T00:00:00.000Z`), lte: new Date(`${fallbackHorizonKey}T00:00:00.000Z`) },
+      },
+    }),
+    prisma.legal_dates.findMany({
+      select: { tenant_id: true, property_id: true },
+      where: { renewal_status: 'renewed' },
+    }),
   ])
-
-  throwIfError(legalResult.error, 'Failed to load lease-expiry legal dates')
-  throwIfError(tenantResult.error, 'Failed to load lease-end tenants')
-  throwIfError(renewedResult.error, 'Failed to load renewed legal dates')
 
   const candidates = new Map<string, {
     organizationId: string
@@ -1646,18 +1595,18 @@ async function detectLeaseExpiryVacancyCandidates(now: Date) {
     triggerNotes: string
   }>()
 
-  for (const row of legalResult.data ?? []) {
-    const contractEnd = (row as { contract_end?: string | null }).contract_end
+  for (const row of legalRows) {
+    const contractEnd = toISODate(row.contract_end as Date | null)
     if (!contractEnd) {
       continue
     }
 
-    const propertyId = (row as { property_id: string }).property_id
+    const propertyId = row.property_id
     candidates.set(`legal:${propertyId}`, {
-      organizationId: (row as { organization_id: string }).organization_id,
-      ownerId: (row as { owner_id: string }).owner_id,
+      organizationId: row.organization_id,
+      ownerId: row.owner_id,
       propertyId,
-      tenantId: (row as { tenant_id?: string | null }).tenant_id ?? null,
+      tenantId: row.tenant_id ?? null,
       expectedVacancyDate: contractEnd,
       sourceType: 'lease_expiry',
       triggerReference: `legal_date:${propertyId}:${contractEnd}`,
@@ -1666,12 +1615,12 @@ async function detectLeaseExpiryVacancyCandidates(now: Date) {
   }
 
   const renewedTenantKeys = new Set(
-    (renewedResult.data ?? []).map((row) => `${(row as { tenant_id?: string | null }).tenant_id ?? 'none'}:${(row as { property_id: string }).property_id}`),
+    renewedRows.map((row) => `${row.tenant_id ?? 'none'}:${row.property_id}`),
   )
 
-  for (const row of tenantResult.data ?? []) {
-    const tenantId = (row as { id: string }).id
-    const propertyId = (row as { property_id: string }).property_id
+  for (const row of tenantRows) {
+    const tenantId = row.id
+    const propertyId = row.property_id
     const renewedKey = `${tenantId}:${propertyId}`
     if (renewedTenantKeys.has(renewedKey)) {
       continue
@@ -1682,11 +1631,11 @@ async function detectLeaseExpiryVacancyCandidates(now: Date) {
     }
 
     candidates.set(`tenant:${propertyId}`, {
-      organizationId: (row as { organization_id: string }).organization_id,
-      ownerId: (row as { owner_id: string }).owner_id,
+      organizationId: row.organization_id,
+      ownerId: row.owner_id,
       propertyId,
       tenantId,
-      expectedVacancyDate: (row as { lease_end_date: string }).lease_end_date,
+      expectedVacancyDate: toISODate(row.lease_end_date as Date | null) ?? '',
       sourceType: 'lease_expiry',
       triggerReference: `tenant_lease:${tenantId}`,
       triggerNotes: 'Active lease end is approaching and should be reviewed for re-letting readiness.',
@@ -1759,37 +1708,35 @@ export async function runDailyVacancyReletting(now = new Date(), input?: { jobId
     }
   }
 
-  const { data: dueCampaigns, error: dueCampaignsError } = await supabaseAdmin
-    .from('vacancy_campaigns')
-    .select('id, organization_id, owner_id, property_id, campaign_status, vacancy_state, expected_vacancy_date')
-    .in('campaign_status', activeVacancyCampaignStatuses)
-    .lt('expected_vacancy_date', toIsoDate(addDays(now, 1)))
+  const dueCampaignRaw = await prisma.vacancy_campaigns.findMany({
+    select: { id: true, organization_id: true, owner_id: true, property_id: true, campaign_status: true, vacancy_state: true, expected_vacancy_date: true },
+    where: {
+      campaign_status: { in: activeVacancyCampaignStatuses },
+      expected_vacancy_date: { lt: new Date(`${toIsoDate(addDays(now, 1))}T00:00:00.000Z`) },
+    },
+  })
 
-  throwIfError(dueCampaignsError, 'Failed to load due vacancy campaigns')
-
-  for (const row of dueCampaigns ?? []) {
-    const campaign = row as {
-      id: string
-      organization_id: string
-      owner_id: string
-      property_id: string
-      campaign_status: VacancyCampaignStatus
-      vacancy_state: Exclude<PropertyOccupancyStatus, 'occupied'>
-      expected_vacancy_date: string
+  for (const row of dueCampaignRaw) {
+    const campaign = {
+      id: row.id,
+      organization_id: row.organization_id,
+      owner_id: row.owner_id,
+      property_id: row.property_id,
+      campaign_status: row.campaign_status as VacancyCampaignStatus,
+      vacancy_state: row.vacancy_state as Exclude<PropertyOccupancyStatus, 'occupied'>,
+      expected_vacancy_date: toISODate(row.expected_vacancy_date as Date | null) ?? '',
     }
 
     if (campaign.vacancy_state !== 'vacant') {
       const nextState = campaign.campaign_status === 'listed' || campaign.campaign_status === 'relisting_in_progress' ? 'relisting_in_progress' : 'vacant'
-      const { error } = await supabaseAdmin
-        .from('vacancy_campaigns')
-        .update({
-          vacancy_state: nextState,
-          actual_vacancy_date: campaign.expected_vacancy_date,
-        })
-        .eq('organization_id', campaign.organization_id)
-        .eq('id', campaign.id)
 
-      throwIfError(error, 'Failed to update due vacancy campaign state')
+      await prisma.vacancy_campaigns.updateMany({
+        where: { organization_id: campaign.organization_id, id: campaign.id },
+        data: {
+          vacancy_state: nextState,
+          actual_vacancy_date: new Date(`${campaign.expected_vacancy_date}T00:00:00.000Z`),
+        },
+      })
 
       await updatePropertyVacancyState({
         organizationId: campaign.organization_id,
@@ -1815,17 +1762,17 @@ export async function runDailyVacancyReletting(now = new Date(), input?: { jobId
     }
   }
 
-  const { data: allActiveData, error: allActiveError } = await supabaseAdmin
-    .from('vacancy_campaigns')
-    .select(
-      'id, organization_id, owner_id, property_id, tenant_id, source_type, campaign_status, vacancy_state, expected_vacancy_date, actual_vacancy_date, trigger_reference, trigger_notes, listing_title, listing_description, listing_features, availability_label, draft_source, draft_generation_status, draft_generated_at, owner_approved_at, approved_by_owner_id, listing_sync_status, listing_provider, listing_external_id, listing_url, enquiry_count, scheduled_viewings_count, applications_count, last_status_digest_at, created_at, updated_at, properties(id, organization_id, owner_id, property_name, address, unit_number, occupancy_status, expected_vacancy_date), tenants(id, organization_id, owner_id, property_id, full_name, email, phone, lease_end_date, monthly_rent, status)'
-    )
-    .in('campaign_status', activeVacancyCampaignStatuses)
-    .order('created_at', { ascending: false })
+  const allActiveRaw = await prisma.vacancy_campaigns.findMany({
+    select: {
+      id: true, organization_id: true, owner_id: true, property_id: true, tenant_id: true, source_type: true, campaign_status: true, vacancy_state: true, expected_vacancy_date: true, actual_vacancy_date: true, trigger_reference: true, trigger_notes: true, listing_title: true, listing_description: true, listing_features: true, availability_label: true, draft_source: true, draft_generation_status: true, draft_generated_at: true, owner_approved_at: true, approved_by_owner_id: true, listing_sync_status: true, listing_provider: true, listing_external_id: true, listing_url: true, enquiry_count: true, scheduled_viewings_count: true, applications_count: true, last_status_digest_at: true, created_at: true, updated_at: true,
+      properties: { select: { id: true, organization_id: true, owner_id: true, property_name: true, address: true, unit_number: true, occupancy_status: true, expected_vacancy_date: true } },
+      tenants: { select: { id: true, organization_id: true, owner_id: true, property_id: true, full_name: true, email: true, phone: true, lease_end_date: true, monthly_rent: true, status: true } },
+    },
+    where: { campaign_status: { in: activeVacancyCampaignStatuses } },
+    orderBy: { created_at: 'desc' },
+  })
 
-  throwIfError(allActiveError, 'Failed to load active vacancy campaigns for digesting')
-
-  const allActiveRows = (allActiveData ?? []) as unknown as VacancyCampaignRow[]
+  const allActiveRows = allActiveRaw.map((row) => serializeVacancyCampaignRow(row as unknown as Record<string, unknown>))
   const relations = await loadVacancyCampaignRelations(allActiveRows.map((row) => row.id))
   const allActiveCampaigns = allActiveRows.map((row) => mapVacancyCampaignOverview(row, relations))
   const campaignsByOwner = new Map<string, VacancyCampaignOverview[]>()
