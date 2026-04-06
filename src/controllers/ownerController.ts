@@ -1,5 +1,9 @@
 import bcrypt from 'bcryptjs'
+import crypto from 'node:crypto'
 import type { Request, Response } from 'express'
+
+import { prisma } from '../lib/db.js'
+import { env } from '../config/env.js'
 
 import { AppError, asyncHandler } from '../lib/errors.js'
 import { requireOrganizationContext } from '../middleware/organizationContext.js'
@@ -137,6 +141,7 @@ import { getAutomationProviderRegistry } from '../services/automation/providers/
 type OtpEntry = { code: string; expiresAt: number }
 const otpStore = new Map<string, OtpEntry>()
 const OTP_TTL_MS = 10 * 60 * 1000
+
 
 function requireOwnerContext(request: Request): { ownerId: string; organizationId: string } {
   const ownerId = request.owner?.ownerId
@@ -2000,73 +2005,25 @@ export const postOwnerAutomationMaintenanceCostController = asyncHandler(async (
   })
 })
 
-export const postOwnerWhatsAppSendOtp = asyncHandler(async (request: Request, response: Response) => {
-  const { ownerId } = requireOwnerContext(request)
-  const parsed = ownerWhatsAppSendOtpSchema.parse(request.body)
-
-  const normalized = normalizeWhatsAppPhone(parsed.phone) ?? parsed.phone
-  const code = String(Math.floor(100000 + Math.random() * 900000))
-
-  otpStore.set(normalized, { code, expiresAt: Date.now() + OTP_TTL_MS })
-
-  const whatsapp = getAutomationProviderRegistry().whatsapp
-  whatsapp
-    .sendTemplate({
-      recipient: normalized,
-      templateKey: 'prophives_otp',
-      templateSid: 'HXcc6b727e7c8a94875eef3cd7bdb5b413',
-      variables: { 1: code },
-      fallbackText: `Your Prophives code: ${code}. Expires in 10 minutes.`,
-      ownerId,
-      organizationId: request.owner?.organizationId ?? '',
-      metadata: { event: 'whatsapp_otp' },
-    })
-    .catch(() => {
-      // Non-fatal: OTP send failure is logged but does not block the response
-    })
-
-  response.json({ ok: true })
-})
-
-export const postOwnerWhatsAppVerifyOtp = asyncHandler(async (request: Request, response: Response) => {
+export const getOwnerWhatsAppConnectUrl = asyncHandler(async (request: Request, response: Response) => {
   const { ownerId, organizationId } = requireOwnerContext(request)
-  const parsed = ownerWhatsAppVerifyOtpSchema.parse(request.body)
 
-  const normalized = normalizeWhatsAppPhone(parsed.phone) ?? parsed.phone
-  const entry = otpStore.get(normalized)
+  // Reuse telegram_onboarding_codes table with role='whatsapp_owner' — no migration needed
+  const code = crypto.randomUUID().replace(/-/g, '').slice(0, 20)
+  const expiresAt = new Date(Date.now() + 30 * 60 * 1000) // 30 min
 
-  if (!entry) {
-    throw new AppError('No OTP was requested for this number', 400)
-  }
-  if (Date.now() > entry.expiresAt) {
-    otpStore.delete(normalized)
-    throw new AppError('OTP has expired — please request a new code', 400)
-  }
-  if (entry.code !== parsed.code) {
-    throw new AppError('Invalid OTP code', 400)
-  }
-
-  otpStore.delete(normalized)
-
-  const owner = await updateOwnerById({
-    ownerId,
-    organizationId,
-    patch: { support_whatsapp: normalized },
+  await prisma.telegram_onboarding_codes.create({
+    data: {
+      code,
+      organization_id: organizationId,
+      user_role: 'whatsapp_owner',
+      owner_id: ownerId,
+      expires_at: expiresAt,
+    },
   })
 
-  if (!owner) {
-    throw new AppError('Owner not found', 404)
-  }
+  const number = (env.TWILIO_WHATSAPP_NUMBER ?? '').replace(/\D/g, '')
+  const connectUrl = `https://wa.me/${number}?text=connect-${code}`
 
-  const ownerName = owner.full_name ?? owner.company_name ?? 'there'
-  void sendOwnerWhatsAppOnboarding({
-    recipient: normalized,
-    text: buildOwnerOnboardingMessage(ownerName),
-    ownerId: owner.id,
-    organizationId: owner.organization_id,
-  }).catch(() => {
-    // Non-fatal
-  })
-
-  response.json({ ok: true })
+  response.json({ ok: true, connect_url: connectUrl })
 })

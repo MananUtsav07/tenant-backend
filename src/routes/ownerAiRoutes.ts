@@ -7,7 +7,7 @@ import {
   postOwnerTicketClassify,
   postOwnerTicketSummarize,
 } from '../controllers/ownerAiController.js'
-import { postOwnerWhatsAppSendOtp, postOwnerWhatsAppVerifyOtp } from '../controllers/ownerController.js'
+import { getOwnerWhatsAppConnectUrl } from '../controllers/ownerController.js'
 import { requireOwnerAuth } from '../middleware/ownerAuth.js'
 
 export function createOwnerAiRouter() {
@@ -19,8 +19,7 @@ export function createOwnerAiRouter() {
   router.get('/integrations', getOwnerIntegrations)
   router.post('/ai/classify', postOwnerTicketClassify)
   router.post('/ai/summarize', postOwnerTicketSummarize)
-  router.post('/whatsapp/send-otp', postOwnerWhatsAppSendOtp)
-  router.post('/whatsapp/verify-otp', postOwnerWhatsAppVerifyOtp)
+  router.get('/whatsapp/connect-url', getOwnerWhatsAppConnectUrl)
 
   return router
 }

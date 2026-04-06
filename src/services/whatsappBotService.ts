@@ -1764,6 +1764,60 @@ async function processApprovalsConversation(input: {
   }
 }
 
+async function handleWhatsAppConnectToken(input: {
+  token: string
+  sender: string
+  sendText: SendTextFn
+}): Promise<boolean> {
+  const now = new Date()
+  const row = await prisma.telegram_onboarding_codes.findFirst({
+    where: { code: input.token, user_role: 'whatsapp_owner', consumed_at: null },
+  })
+
+  if (!row) {
+    await input.sendText({ to: input.sender, text: 'This connect link is invalid or has already been used. Please generate a new one from the Prophives dashboard.' })
+    return true
+  }
+
+  if (row.expires_at <= now) {
+    await input.sendText({ to: input.sender, text: 'This connect link has expired. Please generate a new one from the Prophives dashboard.' })
+    return true
+  }
+
+  if (!row.owner_id) {
+    await input.sendText({ to: input.sender, text: 'Connect link is missing owner context. Please try again.' })
+    return true
+  }
+
+  // Mark token consumed
+  await prisma.telegram_onboarding_codes.updateMany({
+    where: { id: row.id },
+    data: { consumed_at: now },
+  })
+
+  // Link the sender's phone number to the owner
+  const normalizedSender = input.sender.replace(/^whatsapp:/i, '')
+  await upsertOwnerWhatsAppLink({
+    ownerId: row.owner_id,
+    organizationId: row.organization_id,
+    phoneNumber: normalizedSender,
+  })
+
+  // Also save to owner's support_whatsapp field
+  await prisma.owners.updateMany({
+    where: { id: row.owner_id },
+    data: { support_whatsapp: normalizedSender, updated_at: now },
+  })
+
+  await input.sendText({
+    to: input.sender,
+    text: '✅ *WhatsApp connected!*\n\nYour number is now linked to your Prophives account. You can now receive notifications and manage your portfolio here.\n\nType *menu* to get started.',
+    metadata: { event: 'whatsapp_connect_success' },
+  })
+
+  return true
+}
+
 export async function processWhatsAppOwnerBotMessage(input: {
   sender: string
   text: string | null
@@ -1789,6 +1843,15 @@ export async function processWhatsAppOwnerBotMessage(input: {
 
     await cancelActiveFlow({ owner, sender: input.sender, sendText: input.sendText, sendAction: input.sendAction })
     return
+  }
+
+  // ── WhatsApp connect-via-link token handler ──
+  if (incoming.toLowerCase().startsWith('connect-')) {
+    const token = incoming.slice('connect-'.length).trim()
+    if (token.length > 0) {
+      const handled = await handleWhatsAppConnectToken({ token, sender: input.sender, sendText: input.sendText })
+      if (handled) return
+    }
   }
 
   const owner = await resolveOwnerBySenderPhone(input.sender)
