@@ -799,6 +799,7 @@ model organizations {
   vacancy_leads                   vacancy_leads[]
   vacancy_viewings                vacancy_viewings[]
   whatsapp_chat_links             whatsapp_chat_links[]
+  whatsapp_connect_codes          whatsapp_connect_codes[]
   whatsapp_inbound_events         whatsapp_inbound_events[]
   whatsapp_message_deliveries     whatsapp_message_deliveries[]
 
@@ -947,6 +948,7 @@ model owners {
   vacancy_leads                                                                  vacancy_leads[]
   vacancy_viewings                                                               vacancy_viewings[]
   whatsapp_chat_links                                                            whatsapp_chat_links[]
+  whatsapp_connect_codes                                                         whatsapp_connect_codes[]
   whatsapp_message_deliveries                                                    whatsapp_message_deliveries[]
 
   @@index([organization_id])
@@ -1417,6 +1419,21 @@ model telegram_onboarding_codes {
 
   @@index([expires_at], map: "telegram_onboarding_codes_expires_idx")
   @@index([user_role, organization_id], map: "telegram_onboarding_codes_role_org_idx")
+}
+
+model whatsapp_connect_codes {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code            String        @unique
+  organization_id String        @db.Uuid
+  owner_id        String        @db.Uuid
+  expires_at      DateTime      @db.Timestamptz(6)
+  consumed_at     DateTime?     @db.Timestamptz(6)
+  created_at      DateTime      @default(now()) @db.Timestamptz(6)
+  organizations   organizations @relation(fields: [organization_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  owners          owners        @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([expires_at], map: "whatsapp_connect_codes_expires_idx")
+  @@index([owner_id], map: "whatsapp_connect_codes_owner_idx")
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.

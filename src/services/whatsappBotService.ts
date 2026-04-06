@@ -1770,8 +1770,8 @@ async function handleWhatsAppConnectToken(input: {
   sendText: SendTextFn
 }): Promise<boolean> {
   const now = new Date()
-  const row = await prisma.telegram_onboarding_codes.findFirst({
-    where: { code: input.token, user_role: 'whatsapp_owner', consumed_at: null },
+  const row = await prisma.whatsapp_connect_codes.findFirst({
+    where: { code: input.token, consumed_at: null },
   })
 
   if (!row) {
@@ -1784,13 +1784,8 @@ async function handleWhatsAppConnectToken(input: {
     return true
   }
 
-  if (!row.owner_id) {
-    await input.sendText({ to: input.sender, text: 'Connect link is missing owner context. Please try again.' })
-    return true
-  }
-
   // Mark token consumed
-  await prisma.telegram_onboarding_codes.updateMany({
+  await prisma.whatsapp_connect_codes.updateMany({
     where: { id: row.id },
     data: { consumed_at: now },
   })

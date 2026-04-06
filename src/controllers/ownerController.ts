@@ -2008,15 +2008,13 @@ export const postOwnerAutomationMaintenanceCostController = asyncHandler(async (
 export const getOwnerWhatsAppConnectUrl = asyncHandler(async (request: Request, response: Response) => {
   const { ownerId, organizationId } = requireOwnerContext(request)
 
-  // Reuse telegram_onboarding_codes table with role='whatsapp_owner' — no migration needed
   const code = crypto.randomUUID().replace(/-/g, '').slice(0, 20)
   const expiresAt = new Date(Date.now() + 30 * 60 * 1000) // 30 min
 
-  await prisma.telegram_onboarding_codes.create({
+  await prisma.whatsapp_connect_codes.create({
     data: {
       code,
       organization_id: organizationId,
-      user_role: 'whatsapp_owner',
       owner_id: ownerId,
       expires_at: expiresAt,
     },
