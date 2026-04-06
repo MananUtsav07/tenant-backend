@@ -44,5 +44,6 @@ jobs:
           script: |
             cd /opt/prophives-backend
             npm ci --omit=dev
-            pm2 restart prophives-backend 2>/dev/null || pm2 start /opt/prophives-backend/start.sh --name prophives-backend
+            npx prisma generate
+            pm2 restart prophives-backend --update-env 2>/dev/null || pm2 start /opt/prophives-backend/start.sh --name prophives-backend
             pm2 save
