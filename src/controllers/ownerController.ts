@@ -2011,12 +2011,14 @@ export const postOwnerWhatsAppSendOtp = asyncHandler(async (request: Request, re
 
   const whatsapp = getAutomationProviderRegistry().whatsapp
   whatsapp
-    .sendFreeform({
+    .sendTemplate({
       recipient: normalized,
-      text: `Your Prophives code: *${code}*\n\nExpires in 10 minutes.`,
+      templateKey: 'prophives_otp',
+      templateSid: 'HXcc6b727e7c8a94875eef3cd7bdb5b413',
+      variables: { 1: code },
+      fallbackText: `Your Prophives code: ${code}. Expires in 10 minutes.`,
       ownerId,
       organizationId: request.owner?.organizationId ?? '',
-      policyContext: { sessionOpen: true },
       metadata: { event: 'whatsapp_otp' },
     })
     .catch(() => {

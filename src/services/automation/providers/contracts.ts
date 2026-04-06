@@ -33,6 +33,7 @@ export type WhatsAppDeliveryContext = {
 export type WhatsAppTemplateSendInput = WhatsAppDeliveryContext & {
   recipient: string
   templateKey: string
+  templateSid?: string | null
   variables?: Record<string, unknown>
   fallbackText?: string
   language?: string

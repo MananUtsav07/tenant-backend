@@ -47,6 +47,43 @@ function stripWhatsappPrefix(value: string): string {
 }
 
 /** POST to Twilio Messages API. Returns the message SID on success. */
+/** POST to Twilio Messages API using a Content Template SID (no session required). */
+async function twilioSendTemplate(to: string, contentSid: string, variables: Record<string, string>): Promise<string> {
+  const sid = env.TWILIO_ACCOUNT_SID!
+  const token = env.TWILIO_AUTH_TOKEN!
+  const from = env.TWILIO_WHATSAPP_NUMBER!
+
+  const fromFormatted = from.startsWith('whatsapp:') ? from : `whatsapp:${from}`
+  const toFormatted = to.startsWith('whatsapp:') ? to : `whatsapp:${to}`
+
+  const url = `https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`
+  const auth = Buffer.from(`${sid}:${token}`).toString('base64')
+
+  const formData = new URLSearchParams({
+    From: fromFormatted,
+    To: toFormatted,
+    ContentSid: contentSid,
+    ContentVariables: JSON.stringify(variables),
+  })
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${auth}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: formData.toString(),
+  })
+
+  if (!response.ok) {
+    const errText = await response.text()
+    throw new Error(`Twilio template send failed (${response.status}): ${errText}`)
+  }
+
+  const json = (await response.json()) as { sid?: string }
+  return json.sid ?? 'unknown'
+}
+
 async function twilioSend(to: string, body: string): Promise<string> {
   const sid = env.TWILIO_ACCOUNT_SID!
   const token = env.TWILIO_AUTH_TOKEN!
@@ -116,8 +153,33 @@ export class TwilioWhatsAppProvider implements WhatsAppProvider {
       return { provider: 'twilio', status: 'skipped', reason: 'twilio_not_configured' }
     }
 
-    const text = input.fallbackText?.trim() || `[${input.templateKey}]`
+    // Use Content API with template SID if provided (no session required, works cold)
+    if (input.templateSid) {
+      const variables: Record<string, string> = {}
+      if (input.variables) {
+        for (const [k, v] of Object.entries(input.variables)) {
+          variables[k] = String(v)
+        }
+      }
+      try {
+        const externalId = await twilioSendTemplate(input.recipient, input.templateSid, variables)
+        return {
+          provider: 'twilio',
+          status: 'sent',
+          externalId,
+          metadata: { template_key: input.templateKey, template_sid: input.templateSid },
+        }
+      } catch (error) {
+        return {
+          provider: 'twilio',
+          status: 'failed',
+          reason: error instanceof Error ? error.message : 'unknown_error',
+        }
+      }
+    }
 
+    // Fallback: send as freeform (requires open session)
+    const text = input.fallbackText?.trim() || `[${input.templateKey}]`
     try {
       const externalId = await twilioSend(input.recipient, text)
       return {
