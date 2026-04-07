@@ -114,6 +114,7 @@ export const getTenantProperty = asyncHandler(async (request: Request, response:
       payment_status: tenant.payment_status,
       lease_start_date: tenant.lease_start_date,
       lease_end_date: tenant.lease_end_date,
+      brokers: tenant.brokers ?? null,
     },
   })
 })

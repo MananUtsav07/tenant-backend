@@ -39,6 +39,7 @@ export async function getTenantById(tenantId: string, organizationId?: string) {
     include: {
       owners: true,
       properties: true,
+      brokers: { select: { id: true, full_name: true, email: true, phone: true, agency_name: true, is_active: true } },
       organizations: { select: { id: true, name: true, slug: true, plan_code: true, country_code: true, currency_code: true, created_at: true } },
     },
   })
