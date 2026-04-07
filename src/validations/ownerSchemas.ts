@@ -21,7 +21,7 @@ export const createTenantSchema = z.object({
   password: z.string().min(8),
   lease_start_date: z.string().date().optional(),
   lease_end_date: z.string().date().optional(),
-  monthly_rent: z.coerce.number().nonnegative().default(0),
+  monthly_rent: z.coerce.number().min(1, 'Monthly rent must be at least 1'),
   payment_due_day: z.coerce.number().int().min(1).max(31).default(1),
   payment_status: z.enum(['pending', 'paid', 'overdue', 'partial']).optional(),
   status: z.enum(['active', 'inactive', 'terminated']).optional(),

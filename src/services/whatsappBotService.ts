@@ -1549,8 +1549,8 @@ async function processAddTenantConversation(input: {
 
   if (input.conv.step === 'monthly_rent') {
     const rent = Number(value)
-    if (Number.isNaN(rent) || rent < 0) {
-      await input.sendText({ to: input.sender, text: 'Enter a valid non-negative rent amount.' })
+    if (Number.isNaN(rent) || rent < 1) {
+      await input.sendText({ to: input.sender, text: 'Monthly rent must be greater than 0. Enter a valid amount.' })
       return
     }
     input.conv.data.monthly_rent = rent
