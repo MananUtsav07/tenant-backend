@@ -949,3 +949,41 @@ export async function sendTenantRentPaymentRejectedEmail(payload: TenantRentPaym
     html: content.html,
   })
 }
+
+export async function sendOwnerEmailVerificationEmail(payload: {
+  to: string
+  ownerName: string
+  verifyUrl: string
+}) {
+  const content = renderBrandedEmail({
+    preheader: 'Verify your Prophives owner account email address to activate your workspace.',
+    eyebrow: 'Email Verification',
+    title: 'Confirm your email address',
+    intro: [
+      `Hello ${payload.ownerName},`,
+      'Thank you for creating a Prophives account. To activate your owner workspace, please verify your email address.',
+    ],
+    body: [
+      'This verification link expires in 24 hours.',
+      'If you did not create this account, you can safely ignore this email.',
+    ],
+    note: {
+      title: 'Why verify?',
+      body: 'Verification ensures you receive rent alerts, support ticket updates, and important compliance notifications.',
+      tone: 'info',
+    },
+    cta: {
+      label: 'Verify email address',
+      url: payload.verifyUrl,
+    },
+    footer: ['This email was sent because an owner account was registered on Prophives with this email address.'],
+  })
+
+  await transporter.sendMail({
+    from: env.EMAIL_FROM,
+    to: payload.to,
+    subject: 'Verify your Prophives owner account',
+    text: content.text,
+    html: content.html,
+  })
+}

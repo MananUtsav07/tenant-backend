@@ -1,8 +1,12 @@
 import bcrypt from 'bcryptjs'
+import { randomBytes } from 'node:crypto'
 import type { Request, Response } from 'express'
 
 import { AppError, asyncHandler } from '../lib/errors.js'
 import { signOwnerToken, signTenantToken } from '../lib/jwt.js'
+import { sendOwnerEmailVerificationEmail } from '../lib/mailer.js'
+import { prisma } from '../lib/db.js'
+import { env } from '../config/env.js'
 import { createAnalyticsEvent } from '../services/analyticsService.js'
 import { findOwnerByEmail, createOwner, getOwnerById, updateOwnerById } from '../services/ownerService.js'
 import { getAutomationProviderRegistry } from '../services/automation/providers/providerRegistry.js'
@@ -116,6 +120,20 @@ export const registerOwner = asyncHandler(async (request: Request, response: Res
 
   const token = signOwnerToken(owner.id, owner.email, owner.organization_id)
 
+  // Send email verification — fire and forget, never block signup
+  const verificationToken = randomBytes(32).toString('base64url')
+  const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000) // 24 h
+  await prisma.owners.update({
+    where: { id: owner.id },
+    data: { email_verification_token: verificationToken, email_verification_token_expires_at: verificationExpires },
+  })
+  const verifyUrl = `${env.FRONTEND_URL.replace(/\/$/, '')}/verify-email?token=${verificationToken}`
+  sendOwnerEmailVerificationEmail({
+    to: owner.email,
+    ownerName: owner.full_name ?? owner.email,
+    verifyUrl,
+  }).catch(() => {}) // non-blocking
+
   await trackAnalyticsSafe({
     event_name: 'owner_signup',
     user_type: 'owner',
@@ -129,6 +147,7 @@ export const registerOwner = asyncHandler(async (request: Request, response: Res
   response.status(201).json({
     ok: true,
     token,
+    email_verified: false,
     owner: {
       id: owner.id,
       email: owner.email,
@@ -136,6 +155,7 @@ export const registerOwner = asyncHandler(async (request: Request, response: Res
       company_name: owner.company_name,
       support_email: owner.support_email,
       support_whatsapp: owner.support_whatsapp,
+      email_verified: false,
       organization_id: owner.organization_id,
       organization: owner.organizations
         ? {
@@ -225,6 +245,7 @@ export const ownerMe = asyncHandler(async (request: Request, response: Response)
       company_name: owner.company_name,
       support_email: owner.support_email,
       support_whatsapp: owner.support_whatsapp,
+      email_verified: owner.email_verified,
       organization_id: owner.organization_id,
       organization: owner.organizations
         ? {
@@ -473,4 +494,34 @@ export const postTenantResetPassword = asyncHandler(async (request: Request, res
     ok: true,
     message: 'Your resident password has been updated. You can now sign in with the new password.',
   })
+})
+
+export const verifyOwnerEmail = asyncHandler(async (request: Request, response: Response) => {
+  const token = typeof request.query.token === 'string' ? request.query.token.trim() : ''
+  if (!token) throw new AppError('Verification token is required', 400)
+
+  const owner = await prisma.owners.findFirst({
+    where: { email_verification_token: token },
+    select: { id: true, email_verified: true, email_verification_token_expires_at: true },
+  })
+
+  if (!owner) throw new AppError('Invalid or already used verification link', 400)
+  if (owner.email_verified) {
+    return response.json({ ok: true, message: 'Email already verified.' })
+  }
+  if (owner.email_verification_token_expires_at && owner.email_verification_token_expires_at < new Date()) {
+    throw new AppError('Verification link has expired. Please request a new one.', 410)
+  }
+
+  await prisma.owners.update({
+    where: { id: owner.id },
+    data: {
+      email_verified: true,
+      email_verification_token: null,
+      email_verification_token_expires_at: null,
+      updated_at: new Date(),
+    },
+  })
+
+  response.json({ ok: true, message: 'Email verified successfully. You can now use your Prophives account.' })
 })

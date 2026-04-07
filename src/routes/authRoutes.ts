@@ -11,6 +11,7 @@ import {
   postTenantResetPassword,
   registerOwner,
   tenantMe,
+  verifyOwnerEmail,
 } from '../controllers/authController.js'
 import { requireOwnerAuth } from '../middleware/ownerAuth.js'
 import { requireTenantAuth } from '../middleware/tenantAuth.js'
@@ -24,6 +25,7 @@ export function createAuthRouter() {
   router.post('/owner/reset-password', postOwnerResetPassword)
   router.get('/owner/me', requireOwnerAuth, ownerMe)
   router.patch('/owner/me', requireOwnerAuth, patchOwnerMe)
+  router.get('/owner/verify-email', verifyOwnerEmail)
 
   router.post('/tenant/login', loginTenant)
   router.post('/tenant/forgot-password', postTenantForgotPassword)
