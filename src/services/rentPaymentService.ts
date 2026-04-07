@@ -381,6 +381,12 @@ export async function reviewOwnerRentPaymentApproval(input: {
   })
 
   if (input.action === 'approve') {
+    // Immediately update tenant payment_status so dashboard reflects paid without waiting for cron
+    await prisma.tenants.update({
+      where: { id: data.tenant_id as string },
+      data: { payment_status: 'paid', updated_at: new Date() },
+    })
+
     await syncApprovedRentLedgerEntry({
       organizationId: input.organizationId,
       ownerId: input.ownerId,

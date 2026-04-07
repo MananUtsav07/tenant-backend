@@ -163,6 +163,14 @@ export async function updateProperty(organizationId: string, propertyId: string,
 export async function deleteProperty(organizationId: string, propertyId: string) {
   const existing = await prisma.properties.findFirst({ where: { id: propertyId, organization_id: organizationId }, select: { id: true } })
   if (!existing) return 0
+
+  const activeTenantCount = await prisma.tenants.count({
+    where: { property_id: propertyId, organization_id: organizationId, status: { in: ['active', 'inactive'] } },
+  })
+  if (activeTenantCount > 0) {
+    throw new AppError(`Cannot delete property: ${activeTenantCount} tenant(s) are still assigned to it. Terminate or reassign them first.`, 409)
+  }
+
   await prisma.properties.delete({ where: { id: propertyId } })
   return 1
 }

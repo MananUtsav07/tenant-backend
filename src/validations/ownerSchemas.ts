@@ -36,7 +36,7 @@ export const updateTenantSchema = z.object({
   password: z.string().min(8).optional(),
   lease_start_date: z.string().date().nullable().optional(),
   lease_end_date: z.string().date().nullable().optional(),
-  monthly_rent: z.coerce.number().nonnegative().optional(),
+  monthly_rent: z.coerce.number().min(1, 'Monthly rent must be at least 1').optional(),
   payment_due_day: z.coerce.number().int().min(1).max(31).optional(),
   payment_status: z.enum(['pending', 'paid', 'overdue', 'partial']).optional(),
   status: z.enum(['active', 'inactive', 'terminated']).optional(),
