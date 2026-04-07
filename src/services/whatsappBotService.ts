@@ -53,7 +53,7 @@ type AddTenantConversation = {
   flow: 'add_tenant'
   ownerId: string
   organizationId: string
-  step: 'full_name' | 'email' | 'phone' | 'select_property' | 'password' | 'monthly_rent' | 'payment_due_day' | 'confirm'
+  step: 'full_name' | 'email' | 'phone' | 'select_property' | 'password' | 'lease_start_date' | 'lease_end_date' | 'monthly_rent' | 'payment_due_day' | 'confirm'
   data: {
     full_name?: string
     email?: string
@@ -61,6 +61,8 @@ type AddTenantConversation = {
     property_id?: string
     property_name?: string
     password?: string
+    lease_start_date?: string
+    lease_end_date?: string
     monthly_rent?: number
     payment_due_day?: number
     property_options?: Array<{ id: string; label: string }>
@@ -383,7 +385,7 @@ async function sendAddTenantPropertySelection(input: {
   if (options.length <= 3 && input.sendAction) {
     await input.sendText({
       to: input.sender,
-      text: 'Step 4/7: Pick a property below.',
+      text: 'Step 4/9: Pick a property below.',
       organizationId: input.owner.organization_id,
       ownerId: input.owner.id,
     })
@@ -400,7 +402,7 @@ async function sendAddTenantPropertySelection(input: {
 
   await input.sendText({
     to: input.sender,
-    text: ['Step 4/7: Pick property by number', ...options.map((option, index) => `${index + 1}. ${option.label}`)].join('\n'),
+    text: ['Step 4/9: Pick property by number', ...options.map((option, index) => `${index + 1}. ${option.label}`)].join('\n'),
     organizationId: input.owner.organization_id,
     ownerId: input.owner.id,
   })
@@ -424,9 +426,11 @@ async function sendAddTenantConfirmation(input: {
     text: [
       'Confirm tenant creation:',
       `Name: ${input.conv.data.full_name}`,
-      `Email: ${input.conv.data.email ?? '(none)'}`,
+      `Email: ${input.conv.data.email}`,
       `Phone: ${input.conv.data.phone ?? '(none)'}`,
       `Property: ${input.conv.data.property_name}`,
+      `Lease Start: ${input.conv.data.lease_start_date}`,
+      `Lease End: ${input.conv.data.lease_end_date ?? '(none)'}`,
       `Rent: ${input.conv.data.monthly_rent}`,
       `Due Day: ${input.conv.data.payment_due_day}`,
       'Reply YES to confirm, NO to cancel.',
@@ -491,6 +495,8 @@ async function finalizeAddTenant(input: {
       email: input.conv.data.email,
       phone: input.conv.data.phone,
       password_hash: passwordHash,
+      lease_start_date: input.conv.data.lease_start_date,
+      lease_end_date: input.conv.data.lease_end_date,
       monthly_rent: input.conv.data.monthly_rent!,
       payment_due_day: input.conv.data.payment_due_day!,
     },
@@ -1304,7 +1310,7 @@ async function startAddTenant(input: { owner: OwnerIdentity; sender: string; sen
 
   await input.sendText({
     to: input.sender,
-    text: 'Add Tenant\nStep 1/7: Enter tenant full name:',
+    text: 'Add Tenant\nStep 1/9: Enter tenant full name:',
     organizationId: input.owner.organization_id,
     ownerId: input.owner.id,
     metadata: { event: 'whatsapp_add_tenant_start' },
@@ -1448,28 +1454,28 @@ async function processAddTenantConversation(input: {
     input.conv.step = 'email'
     input.conv.updatedAt = nowMs()
     conversations.set(input.sender, input.conv)
-    await input.sendText({ to: input.sender, text: 'Step 2/7: Enter email or type "skip".' })
+    await input.sendText({ to: input.sender, text: 'Step 2/9: Enter tenant email address.' })
     await sendCancelFlowAction({ owner, sender: input.sender, sendAction: input.sendAction, metadataEvent: 'whatsapp_add_tenant_cancel' })
     return
   }
 
   if (input.conv.step === 'email') {
-    if (lc !== 'skip' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
-      await input.sendText({ to: input.sender, text: 'Invalid email. Enter valid email or "skip".' })
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+      await input.sendText({ to: input.sender, text: 'Invalid email. Enter a valid email address (required for tenant login).' })
       return
     }
-    input.conv.data.email = lc === 'skip' ? undefined : value.toLowerCase()
+    input.conv.data.email = value.toLowerCase()
     input.conv.step = 'phone'
     input.conv.updatedAt = nowMs()
     conversations.set(input.sender, input.conv)
-    await input.sendText({ to: input.sender, text: 'Step 3/7: Enter phone number or type "skip".' })
+    await input.sendText({ to: input.sender, text: 'Step 3/9: Enter phone number or type "skip".' })
     await sendCancelFlowAction({ owner, sender: input.sender, sendAction: input.sendAction, metadataEvent: 'whatsapp_add_tenant_cancel' })
     return
   }
 
   if (input.conv.step === 'phone') {
     if (lc !== 'skip' && value.length > 30) {
-      await input.sendText({ to: input.sender, text: 'Phone must be <= 30 chars. Enter phone or "skip".' })
+      await input.sendText({ to: input.sender, text: 'Phone must be 30 characters or less. Enter phone or "skip".' })
       return
     }
     input.conv.data.phone = lc === 'skip' ? undefined : value
@@ -1494,7 +1500,7 @@ async function processAddTenantConversation(input: {
     input.conv.step = 'password'
     input.conv.updatedAt = nowMs()
     conversations.set(input.sender, input.conv)
-    await input.sendText({ to: input.sender, text: 'Step 5/7: Enter tenant password (min 8 chars).' })
+    await input.sendText({ to: input.sender, text: 'Step 5/9: Enter tenant password (min 8 characters).' })
     await sendCancelFlowAction({ owner, sender: input.sender, sendAction: input.sendAction, metadataEvent: 'whatsapp_add_tenant_password_cancel' })
     return
   }
@@ -1505,10 +1511,38 @@ async function processAddTenantConversation(input: {
       return
     }
     input.conv.data.password = value
+    input.conv.step = 'lease_start_date'
+    input.conv.updatedAt = nowMs()
+    conversations.set(input.sender, input.conv)
+    await input.sendText({ to: input.sender, text: 'Step 6/9: Enter lease start date (YYYY-MM-DD, e.g. 2025-01-01).' })
+    await sendCancelFlowAction({ owner, sender: input.sender, sendAction: input.sendAction, metadataEvent: 'whatsapp_add_tenant_lease_start_cancel' })
+    return
+  }
+
+  if (input.conv.step === 'lease_start_date') {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || isNaN(Date.parse(value))) {
+      await input.sendText({ to: input.sender, text: 'Invalid date. Enter lease start date as YYYY-MM-DD (e.g. 2025-01-01).' })
+      return
+    }
+    input.conv.data.lease_start_date = value
+    input.conv.step = 'lease_end_date'
+    input.conv.updatedAt = nowMs()
+    conversations.set(input.sender, input.conv)
+    await input.sendText({ to: input.sender, text: 'Step 7/9: Enter lease end date (YYYY-MM-DD) or type "skip".' })
+    await sendCancelFlowAction({ owner, sender: input.sender, sendAction: input.sendAction, metadataEvent: 'whatsapp_add_tenant_lease_end_cancel' })
+    return
+  }
+
+  if (input.conv.step === 'lease_end_date') {
+    if (lc !== 'skip' && (!/^\d{4}-\d{2}-\d{2}$/.test(value) || isNaN(Date.parse(value)))) {
+      await input.sendText({ to: input.sender, text: 'Invalid date. Enter lease end date as YYYY-MM-DD or type "skip".' })
+      return
+    }
+    input.conv.data.lease_end_date = lc === 'skip' ? undefined : value
     input.conv.step = 'monthly_rent'
     input.conv.updatedAt = nowMs()
     conversations.set(input.sender, input.conv)
-    await input.sendText({ to: input.sender, text: 'Step 6/7: Enter monthly rent amount.' })
+    await input.sendText({ to: input.sender, text: 'Step 8/9: Enter monthly rent amount.' })
     await sendCancelFlowAction({ owner, sender: input.sender, sendAction: input.sendAction, metadataEvent: 'whatsapp_add_tenant_rent_cancel' })
     return
   }
@@ -1516,14 +1550,14 @@ async function processAddTenantConversation(input: {
   if (input.conv.step === 'monthly_rent') {
     const rent = Number(value)
     if (Number.isNaN(rent) || rent < 0) {
-      await input.sendText({ to: input.sender, text: 'Enter valid non-negative rent amount.' })
+      await input.sendText({ to: input.sender, text: 'Enter a valid non-negative rent amount.' })
       return
     }
     input.conv.data.monthly_rent = rent
     input.conv.step = 'payment_due_day'
     input.conv.updatedAt = nowMs()
     conversations.set(input.sender, input.conv)
-    await input.sendText({ to: input.sender, text: 'Step 7/7: Enter payment due day (1-31).' })
+    await input.sendText({ to: input.sender, text: 'Step 9/9: Enter payment due day (1-31).' })
     await sendCancelFlowAction({ owner, sender: input.sender, sendAction: input.sendAction, metadataEvent: 'whatsapp_add_tenant_due_day_cancel' })
     return
   }
