@@ -255,7 +255,14 @@ export async function getTenantForOwner(organizationId: string, tenantId: string
 }
 
 export async function updateTenant(organizationId: string, tenantId: string, patch: Record<string, unknown>) {
-  return prisma.tenants.update({ where: { id: tenantId }, data: patch })
+  const data: Record<string, unknown> = { ...patch }
+  if (typeof data.lease_start_date === 'string' && data.lease_start_date) {
+    data.lease_start_date = new Date(data.lease_start_date)
+  }
+  if (typeof data.lease_end_date === 'string' && data.lease_end_date) {
+    data.lease_end_date = new Date(data.lease_end_date)
+  }
+  return prisma.tenants.update({ where: { id: tenantId }, data })
 }
 
 export async function deleteTenant(organizationId: string, tenantId: string) {

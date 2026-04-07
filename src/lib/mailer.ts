@@ -445,18 +445,9 @@ function renderBrandedEmail(options: BrandedEmailOptions) {
                                 </td>
                               </tr>
                             </table>
-                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:18px 0 0;border:1px solid #253247;border-radius:18px;background-color:#0c131d;">
-                              <tr>
-                                <td style="padding:14px 16px;">
-                                  <div style="margin:0 0 7px;color:#9aa6ba;font-family:'Segoe UI',Arial,sans-serif;font-size:11px;font-weight:700;letter-spacing:0.16em;text-transform:uppercase;">
-                                    Button not working?
-                                  </div>
-                                  <div style="margin:0;color:#f5f7fb;font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;font-size:12px;line-height:1.75;word-break:break-all;">
-                                    ${escapeHtml(options.cta.url)}
-                                  </div>
-                                </td>
-                              </tr>
-                            </table>
+                            <p style="margin:14px 0 0;color:#6b7a96;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;line-height:1.7;text-align:center;">
+                              Button not opening? <a href="${escapeHtml(options.cta.url)}" style="color:#c9a84c;text-decoration:underline;font-weight:600;">Open link directly</a>
+                            </p>
                           `
                           : ''
                       }
