@@ -120,7 +120,7 @@ export async function processOwnerReminders(input: { ownerId: string; organizati
         void sendTenantRentReminderEmail({
           to: tenant.email,
           tenantName: tenant.full_name,
-          reminderType,
+          reminderType: reminderType as '1_day_before' | 'due_today' | '3_days_late' | '7_days_late',
           dueDateLabel,
           amountLabel,
         }).catch((err: unknown) => {
