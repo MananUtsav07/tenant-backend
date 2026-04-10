@@ -525,3 +525,33 @@ export const verifyOwnerEmail = asyncHandler(async (request: Request, response: 
 
   response.json({ ok: true, message: 'Email verified successfully. You can now use your Prophives account.' })
 })
+
+export const resendOwnerEmailVerification = asyncHandler(async (request: Request, response: Response) => {
+  const ownerId = request.owner?.ownerId
+  if (!ownerId) throw new AppError('Owner authentication required', 401)
+
+  const owner = await prisma.owners.findUnique({
+    where: { id: ownerId },
+    select: { id: true, email: true, full_name: true, email_verified: true },
+  })
+  if (!owner) throw new AppError('Owner not found', 404)
+  if (owner.email_verified) {
+    return response.json({ ok: true, message: 'Email is already verified.' })
+  }
+
+  const verificationToken = randomBytes(32).toString('base64url')
+  const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000)
+  await prisma.owners.update({
+    where: { id: ownerId },
+    data: { email_verification_token: verificationToken, email_verification_token_expires_at: verificationExpires, updated_at: new Date() },
+  })
+
+  const verifyUrl = `${env.FRONTEND_URL.replace(/\/$/, '')}/verify-email?token=${verificationToken}`
+  await sendOwnerEmailVerificationEmail({
+    to: owner.email,
+    ownerName: owner.full_name ?? owner.email,
+    verifyUrl,
+  })
+
+  response.json({ ok: true, message: 'Verification email sent. Please check your inbox.' })
+})

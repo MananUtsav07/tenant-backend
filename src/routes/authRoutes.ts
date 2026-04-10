@@ -10,6 +10,7 @@ import {
   postTenantForgotPassword,
   postTenantResetPassword,
   registerOwner,
+  resendOwnerEmailVerification,
   tenantMe,
   verifyOwnerEmail,
 } from '../controllers/authController.js'
@@ -26,6 +27,7 @@ export function createAuthRouter() {
   router.get('/owner/me', requireOwnerAuth, ownerMe)
   router.patch('/owner/me', requireOwnerAuth, patchOwnerMe)
   router.get('/owner/verify-email', verifyOwnerEmail)
+  router.post('/owner/resend-verification', requireOwnerAuth, resendOwnerEmailVerification)
 
   router.post('/tenant/login', loginTenant)
   router.post('/tenant/forgot-password', postTenantForgotPassword)
