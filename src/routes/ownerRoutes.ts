@@ -22,6 +22,7 @@ import {
   getOwnerScreeningOverviewController,
   getOwnerTelegramOnboarding,
   getOwnerTenantById,
+  getOwnerAllDocumentsController,
   getOwnerTenantDocumentsController,
   getOwnerTenantConditionReportsController,
   getOwnerTicketById,
@@ -92,6 +93,8 @@ export function createOwnerRouter() {
   router.post('/brokers', postOwnerBroker)
   router.patch('/brokers/:brokerId', patchOwnerBroker)
   router.delete('/brokers/:brokerId', removeOwnerBroker)
+
+  router.get('/documents', getOwnerAllDocumentsController)
 
   router.post('/tenants', createOwnerTenant)
   router.get('/tenants', getOwnerTenants)

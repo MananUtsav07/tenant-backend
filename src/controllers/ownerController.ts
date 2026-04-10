@@ -146,6 +146,7 @@ import { getAutomationProviderRegistry } from '../services/automation/providers/
 import {
   createTenantDocument,
   deleteTenantDocument,
+  listAllTenantDocuments,
   listTenantDocuments,
   updateTenantDocument,
 } from '../services/tenantDocumentService.js'
@@ -865,6 +866,12 @@ export const getOwnerTenantById = asyncHandler(async (request: Request, response
   }
 
   response.json({ ok: true, ...detail })
+})
+
+export const getOwnerAllDocumentsController = asyncHandler(async (request: Request, response: Response) => {
+  const { ownerId, organizationId } = requireOwnerContext(request)
+  const documents = await listAllTenantDocuments({ organizationId, ownerId })
+  response.json({ ok: true, documents })
 })
 
 export const getOwnerTenantDocumentsController = asyncHandler(async (request: Request, response: Response) => {

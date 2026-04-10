@@ -2,7 +2,6 @@ import { AppError } from '../lib/errors.js'
 import { prisma } from '../lib/db.js'
 import { upsertTenantWhatsAppLink } from './whatsappLinkService.js'
 import { getCurrentCycleYearMonth, resolveTenantPaymentStatus } from '../utils/paymentStatus.js'
-import { classifyTicketIntent } from './ai/intentClassifier.js'
 
 async function hasApprovedRentPaymentForCurrentCycle(input: {
   tenantId: string
@@ -90,14 +89,6 @@ export async function createTenantTicket(input: {
       status: 'open',
     },
   })
-
-  void classifyTicketIntent({ organizationId: input.organization_id, ticketId: data.id, subject: input.subject, message: input.message })
-    .then(async (result) => {
-      if (result) {
-        await prisma.support_tickets.update({ where: { id: data.id }, data: { ai_category: result.category, ai_confidence: result.confidence } })
-      }
-    })
-    .catch(() => {})
 
   return data
 }

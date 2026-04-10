@@ -27,6 +27,24 @@ async function assertTenantOwnership(input: { organizationId: string; ownerId: s
   }
 }
 
+export async function listAllTenantDocuments(input: { organizationId: string; ownerId: string }) {
+  const rows = await prisma.tenant_documents.findMany({
+    where: {
+      organization_id: input.organizationId,
+      owner_id: input.ownerId,
+    },
+    include: {
+      tenants: { select: { id: true, full_name: true } },
+    },
+    orderBy: { created_at: 'desc' },
+  })
+
+  return rows.map((row) => ({
+    ...mapTenantDocument(row),
+    tenant_name: row.tenants?.full_name ?? null,
+  }))
+}
+
 export async function listTenantDocuments(input: { organizationId: string; ownerId: string; tenantId: string }) {
   await assertTenantOwnership(input)
 
