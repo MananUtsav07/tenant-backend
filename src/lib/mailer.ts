@@ -226,31 +226,13 @@ function renderBrandedEmail(options: BrandedEmailOptions) {
     ...(footerLines.length > 0 ? ['', ...footerLines] : []),
   ].join('\n')
 
-  // Note tone palette — warm dark theme
+  // Note tone palette — light theme
   const noteTone =
     options.note?.tone === 'success'
-      ? {
-          border: '#1a5c38',
-          background: '#0c1f14',
-          title: '#6dcea0',
-          text: '#b8dfc9',
-          icon: '✓',
-        }
+      ? { border: '#BBF7D0', background: '#F0FDF4', title: '#15803D', text: '#166534' }
       : options.note?.tone === 'warning'
-        ? {
-            border: '#7a5f00',
-            background: '#1a1500',
-            title: '#FED609',
-            text: '#e0ca6a',
-            icon: '!',
-          }
-        : {
-            border: '#3a3200',
-            background: '#131000',
-            title: '#c8b84a',
-            text: '#b0a060',
-            icon: 'i',
-          }
+        ? { border: '#FDE68A', background: '#FFFBEB', title: '#B45309', text: '#92400E' }
+        : { border: '#BFDBFE', background: '#EFF6FF', title: '#1D4ED8', text: '#1E40AF' }
 
   const html = `
 <!DOCTYPE html>
@@ -260,53 +242,38 @@ function renderBrandedEmail(options: BrandedEmailOptions) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="x-apple-disable-message-reformatting" />
     <style>
-      body, table, td, a {
-        -webkit-text-size-adjust: 100%;
-        -ms-text-size-adjust: 100%;
-      }
-      table, td {
-        mso-table-lspace: 0pt;
-        mso-table-rspace: 0pt;
-      }
-      table {
-        border-collapse: separate;
-      }
-      @media only screen and (max-width: 620px) {
-        .ph-shell { width: 100% !important; }
-        .ph-mobile-pad { padding: 24px 18px !important; }
-        .ph-title { font-size: 24px !important; line-height: 1.2 !important; }
-        .ph-copy { font-size: 15px !important; line-height: 1.75 !important; }
-        .ph-detail-value-strong { font-size: 17px !important; }
-        .ph-cta, .ph-cta a {
-          display: block !important;
-          width: 100% !important;
-          box-sizing: border-box !important;
-          text-align: center !important;
-        }
+      body, table, td, a { -webkit-text-size-adjust:100%; -ms-text-size-adjust:100%; }
+      table, td { mso-table-lspace:0pt; mso-table-rspace:0pt; }
+      table { border-collapse:collapse; }
+      img { border:0; outline:none; text-decoration:none; }
+      @media only screen and (max-width:620px) {
+        .ph-shell { width:100% !important; }
+        .ph-pad { padding:24px 20px !important; }
+        .ph-title { font-size:22px !important; }
+        .ph-cta td { display:block !important; width:100% !important; }
+        .ph-cta a { display:block !important; width:100% !important; box-sizing:border-box !important; text-align:center !important; }
       }
     </style>
     <title>${escapeHtml(options.title)}</title>
   </head>
-  <body style="margin:0;padding:0;background-color:#0C0900;">
-    <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;font-size:1px;line-height:1px;mso-hide:all;">
-      ${escapeHtml(preheader)}
-    </div>
+  <body style="margin:0;padding:0;background-color:#F3F4F8;">
+    <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;font-size:1px;line-height:1px;mso-hide:all;">${escapeHtml(preheader)}&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;</div>
 
-    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color:#0C0900;margin:0;padding:0;width:100%;">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color:#F3F4F8;">
       <tr>
-        <td align="center" style="padding:32px 14px 40px;">
-          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="ph-shell" style="max-width:620px;width:100%;">
+        <td align="center" style="padding:32px 16px 40px;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" class="ph-shell" style="max-width:600px;width:100%;">
 
             <!-- Logo bar -->
             <tr>
-              <td style="padding:0 0 20px 0;" align="center">
+              <td align="center" style="padding:0 0 24px 0;">
                 <table role="presentation" cellpadding="0" cellspacing="0" border="0">
                   <tr>
-                    <td style="vertical-align:middle;padding-right:8px;">
-                      <div style="width:28px;height:28px;background-color:#FED609;border-radius:6px;display:inline-block;line-height:28px;text-align:center;font-size:15px;font-weight:900;color:#0C0900;font-family:Georgia,serif;">P</div>
+                    <td style="vertical-align:middle;padding-right:9px;">
+                      <div style="width:30px;height:30px;background-color:#2251E3;border-radius:7px;text-align:center;line-height:30px;font-size:16px;font-weight:900;color:#ffffff;font-family:'Helvetica Neue',Arial,sans-serif;">P</div>
                     </td>
                     <td style="vertical-align:middle;">
-                      <span style="font-family:Georgia,'Times New Roman',serif;font-size:18px;font-weight:700;letter-spacing:0.06em;color:#FED609;">Prophives</span>
+                      <span style="font-family:'Helvetica Neue',Arial,sans-serif;font-size:19px;font-weight:800;letter-spacing:-0.02em;color:#0F1117;">Prophives</span>
                     </td>
                   </tr>
                 </table>
@@ -315,23 +282,23 @@ function renderBrandedEmail(options: BrandedEmailOptions) {
 
             <!-- Main card -->
             <tr>
-              <td style="border:1px solid #2A2200;background-color:#131000;border-radius:20px;padding:0;overflow:hidden;">
+              <td style="background-color:#ffffff;border-radius:16px;border:1px solid #E2E4EC;overflow:hidden;padding:0;">
                 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
 
-                  <!-- Header: gold accent bar + eyebrow + title -->
+                  <!-- Blue accent bar -->
                   <tr>
-                    <td style="padding:0;">
-                      <div style="height:3px;background:linear-gradient(90deg,#FED609 0%,#B8960A 60%,transparent 100%);border-radius:20px 20px 0 0;"></div>
-                    </td>
+                    <td style="padding:0;height:4px;background-color:#2251E3;border-radius:16px 16px 0 0;font-size:0;line-height:0;">&nbsp;</td>
                   </tr>
+
+                  <!-- Header -->
                   <tr>
-                    <td class="ph-mobile-pad" style="padding:32px 36px 24px;background-color:#1A1500;border-bottom:1px solid #2A2200;">
-                      <div style="margin:0 0 16px;">
-                        <span style="display:inline-block;border:1px solid #3A3000;background-color:#0C0900;border-radius:999px;padding:5px 14px;color:#D4A800;font-family:'Helvetica Neue',Arial,sans-serif;font-size:10px;font-weight:700;letter-spacing:0.22em;text-transform:uppercase;">
+                    <td class="ph-pad" style="padding:28px 36px 20px;border-bottom:1px solid #F1F2F6;">
+                      <div style="margin:0 0 14px;">
+                        <span style="display:inline-block;background-color:#EEF2FF;border:1px solid #C7D2FE;border-radius:999px;padding:4px 13px;color:#2251E3;font-family:'Helvetica Neue',Arial,sans-serif;font-size:10px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;">
                           ${escapeHtml(options.eyebrow)}
                         </span>
                       </div>
-                      <h1 class="ph-title" style="margin:0;color:#FEFAEF;font-family:Georgia,'Times New Roman',serif;font-size:28px;line-height:1.2;font-weight:700;letter-spacing:-0.01em;">
+                      <h1 class="ph-title" style="margin:0;color:#0F1117;font-family:'Helvetica Neue',Arial,sans-serif;font-size:24px;line-height:1.25;font-weight:800;letter-spacing:-0.02em;">
                         ${escapeHtml(options.title)}
                       </h1>
                     </td>
@@ -339,12 +306,12 @@ function renderBrandedEmail(options: BrandedEmailOptions) {
 
                   <!-- Body -->
                   <tr>
-                    <td class="ph-mobile-pad" style="padding:28px 36px 32px;background-color:#131000;">
+                    <td class="ph-pad" style="padding:24px 36px 32px;">
 
                       ${options.intro
                         .map(
                           (line) => `
-                            <p class="ph-copy" style="margin:0 0 12px;color:#C8B878;font-family:'Helvetica Neue',Arial,sans-serif;font-size:15px;line-height:1.75;">
+                            <p style="margin:0 0 10px;color:#374151;font-family:'Helvetica Neue',Arial,sans-serif;font-size:15px;line-height:1.7;">
                               ${escapeHtml(line)}
                             </p>
                           `,
@@ -354,41 +321,25 @@ function renderBrandedEmail(options: BrandedEmailOptions) {
                       ${
                         options.details && options.details.length > 0
                           ? `
-                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:22px 0 0;border:1px solid #2A2200;border-radius:14px;background-color:#0E0B00;overflow:hidden;">
+                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:20px 0 0;border:1px solid #E2E4EC;border-radius:12px;overflow:hidden;background-color:#F8F9FB;">
                               <tr>
                                 <td style="padding:4px 20px 8px;">
                                   ${options.details
                                     .map((item, index) => {
-                                      const tone =
-                                        item.tone === 'security'
-                                          ? {
-                                              label: '#D4A800',
-                                              valueBackground: '#1A1500',
-                                              valueBorder: '#4A3C00',
-                                              valueColor: '#FEFAEF',
-                                            }
-                                          : item.tone === 'accent'
-                                            ? {
-                                                label: '#D4A800',
-                                                valueBackground: '#1A1500',
-                                                valueBorder: '#4A3C00',
-                                                valueColor: '#FED609',
-                                              }
-                                            : {
-                                                label: '#806040',
-                                                valueBackground: '#0C0900',
-                                                valueBorder: '#2A2200',
-                                                valueColor: '#FEFAEF',
-                                              }
+                                      const isAccent = item.tone === 'accent'
+                                      const isSecurity = item.tone === 'security'
+                                      const valueColor = isAccent ? '#2251E3' : isSecurity ? '#0F1117' : '#374151'
+                                      const valueBg = isAccent || isSecurity ? '#EEF2FF' : '#ffffff'
+                                      const valueBorder = isAccent || isSecurity ? '#C7D2FE' : '#E2E4EC'
 
                                       return `
                                         <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
                                           <tr>
-                                            <td style="padding:${index === 0 ? '16px 0 12px' : '12px 0'};${index < options.details!.length - 1 ? 'border-bottom:1px solid #1E1800;' : ''}">
-                                              <div style="margin:0 0 6px;color:${tone.label};font-family:'Helvetica Neue',Arial,sans-serif;font-size:10px;font-weight:700;letter-spacing:0.2em;text-transform:uppercase;">
+                                            <td style="padding:${index === 0 ? '16px 0 12px' : '12px 0'};${index < options.details!.length - 1 ? 'border-bottom:1px solid #EAECF1;' : ''}">
+                                              <div style="margin:0 0 5px;color:#6B7280;font-family:'Helvetica Neue',Arial,sans-serif;font-size:10px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;">
                                                 ${escapeHtml(item.label)}
                                               </div>
-                                              <div class="${item.emphasize ? 'ph-detail-value-strong' : ''}" style="border:1px solid ${tone.valueBorder};background-color:${tone.valueBackground};border-radius:10px;padding:${item.emphasize ? '12px 14px' : '10px 14px'};color:${tone.valueColor};font-family:${item.monospace ? `'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace` : `'Helvetica Neue',Arial,sans-serif`};font-size:${item.emphasize ? '17px' : '14px'};line-height:1.5;font-weight:${item.emphasize ? '700' : '500'};word-break:break-word;">
+                                              <div style="border:1px solid ${valueBorder};background-color:${valueBg};border-radius:8px;padding:${item.emphasize ? '11px 14px' : '9px 14px'};color:${valueColor};font-family:${item.monospace ? `'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace` : `'Helvetica Neue',Arial,sans-serif`};font-size:${item.emphasize ? '16px' : '14px'};line-height:1.5;font-weight:${item.emphasize ? '700' : '500'};word-break:break-word;">
                                                 ${escapeHtml(item.value)}
                                               </div>
                                             </td>
@@ -409,7 +360,7 @@ function renderBrandedEmail(options: BrandedEmailOptions) {
                           ? options.body
                               .map(
                                 (line) => `
-                                  <p class="ph-copy" style="margin:14px 0 0;color:#8A7840;font-family:'Helvetica Neue',Arial,sans-serif;font-size:14px;line-height:1.75;">
+                                  <p style="margin:12px 0 0;color:#6B7280;font-family:'Helvetica Neue',Arial,sans-serif;font-size:14px;line-height:1.7;">
                                     ${escapeHtml(line)}
                                   </p>
                                 `,
@@ -421,13 +372,13 @@ function renderBrandedEmail(options: BrandedEmailOptions) {
                       ${
                         options.note
                           ? `
-                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:20px 0 0;border:1px solid ${noteTone.border};border-radius:12px;background-color:${noteTone.background};">
+                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:18px 0 0;border:1px solid ${noteTone.border};border-radius:10px;background-color:${noteTone.background};">
                               <tr>
-                                <td style="padding:14px 18px;">
-                                  <div style="margin:0 0 6px;color:${noteTone.title};font-family:'Helvetica Neue',Arial,sans-serif;font-size:10px;font-weight:700;letter-spacing:0.2em;text-transform:uppercase;">
+                                <td style="padding:13px 16px;">
+                                  <div style="margin:0 0 5px;color:${noteTone.title};font-family:'Helvetica Neue',Arial,sans-serif;font-size:10px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;">
                                     ${escapeHtml(options.note.title)}
                                   </div>
-                                  <div style="margin:0;color:${noteTone.text};font-family:'Helvetica Neue',Arial,sans-serif;font-size:13px;line-height:1.7;">
+                                  <div style="margin:0;color:${noteTone.text};font-family:'Helvetica Neue',Arial,sans-serif;font-size:13px;line-height:1.65;">
                                     ${escapeHtml(options.note.body)}
                                   </div>
                                 </td>
@@ -440,17 +391,17 @@ function renderBrandedEmail(options: BrandedEmailOptions) {
                       ${
                         options.cta
                           ? `
-                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:28px 0 0;">
+                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" class="ph-cta" style="margin:26px 0 0;">
                               <tr>
-                                <td class="ph-cta" style="border-radius:999px;background-color:#FED609;">
-                                  <a href="${escapeHtml(options.cta.url)}" style="display:inline-block;padding:14px 32px;border-radius:999px;background-color:#FED609;color:#0C0900;font-family:'Helvetica Neue',Arial,sans-serif;font-size:14px;font-weight:700;letter-spacing:0.04em;text-decoration:none;">
+                                <td style="border-radius:8px;background-color:#2251E3;">
+                                  <a href="${escapeHtml(options.cta.url)}" style="display:inline-block;padding:13px 30px;border-radius:8px;background-color:#2251E3;color:#ffffff;font-family:'Helvetica Neue',Arial,sans-serif;font-size:14px;font-weight:700;letter-spacing:0.02em;text-decoration:none;">
                                     ${escapeHtml(options.cta.label)}
                                   </a>
                                 </td>
                               </tr>
                             </table>
-                            <p style="margin:12px 0 0;color:#4A3C00;font-family:'Helvetica Neue',Arial,sans-serif;font-size:11px;line-height:1.6;">
-                              If the button doesn't open — <a href="${escapeHtml(options.cta.url)}" style="color:#D4A800;text-decoration:underline;">copy this link</a>
+                            <p style="margin:10px 0 0;color:#9CA3AF;font-family:'Helvetica Neue',Arial,sans-serif;font-size:11px;line-height:1.6;">
+                              Button not working? <a href="${escapeHtml(options.cta.url)}" style="color:#2251E3;text-decoration:underline;">Open link directly</a>
                             </p>
                           `
                           : ''
@@ -459,13 +410,13 @@ function renderBrandedEmail(options: BrandedEmailOptions) {
                       ${
                         footerLines.length > 0
                           ? `
-                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:24px 0 0;border-top:1px solid #1E1800;">
+                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:22px 0 0;border-top:1px solid #F1F2F6;">
                               <tr>
-                                <td style="padding-top:18px;">
+                                <td style="padding-top:16px;">
                                   ${footerLines
                                     .map(
                                       (line) => `
-                                        <p style="margin:0 0 6px;color:#4A3C00;font-family:'Helvetica Neue',Arial,sans-serif;font-size:12px;line-height:1.7;">
+                                        <p style="margin:0 0 5px;color:#9CA3AF;font-family:'Helvetica Neue',Arial,sans-serif;font-size:12px;line-height:1.65;">
                                           ${escapeHtml(line)}
                                         </p>
                                       `,
@@ -486,8 +437,8 @@ function renderBrandedEmail(options: BrandedEmailOptions) {
 
             <!-- Bottom wordmark -->
             <tr>
-              <td style="padding:20px 0 0;" align="center">
-                <p style="margin:0;color:#2A2200;font-family:'Helvetica Neue',Arial,sans-serif;font-size:11px;letter-spacing:0.12em;text-transform:uppercase;">
+              <td align="center" style="padding:20px 0 0;">
+                <p style="margin:0;color:#9CA3AF;font-family:'Helvetica Neue',Arial,sans-serif;font-size:11px;letter-spacing:0.1em;text-transform:uppercase;">
                   Prophives &mdash; Property Management Platform
                 </p>
               </td>
