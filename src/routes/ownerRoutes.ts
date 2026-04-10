@@ -68,7 +68,6 @@ import {
   postOwnerTenantConditionReportController,
   postOwnerTenantDocumentController,
   postOwnerTenantDocumentUploadUrlController,
-  processReminders,
   postOwnerBroker,
   putOwnerAutomationSettingsController,
   removeOwnerProperty,
@@ -141,7 +140,6 @@ export function createOwnerRouter() {
   router.get('/dashboard-summary', getOwnerSummary)
   router.get('/rent-payment-approvals', getOwnerRentPaymentApprovals)
   router.patch('/rent-payment-approvals/:id', patchOwnerRentPaymentApproval)
-  router.post('/process-reminders', processReminders)
   router.get('/automation/settings', getOwnerAutomationSettingsController)
   router.put('/automation/settings', putOwnerAutomationSettingsController)
   router.get('/automation/activity', getOwnerAutomationActivityController)

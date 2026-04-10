@@ -55,7 +55,7 @@ import {
   updateTenant,
 } from '../services/ownerService.js'
 import { createTenantDocumentUploadTarget } from '../services/s3StorageService.js'
-import { processOwnerReminders } from '../services/reminderService.js'
+import { generateRemindersForTenant, processOwnerReminders } from '../services/reminderService.js'
 import { listOwnerAwaitingRentPaymentApprovals, reviewOwnerRentPaymentApproval } from '../services/rentPaymentService.js'
 import { getOwnerTicketThread, replyToTicketAsOwner, updateTicketStatusAsOwner } from '../services/ticketThreadService.js'
 import {
@@ -743,6 +743,15 @@ export const createOwnerTenant = asyncHandler(async (request: Request, response:
     })
   })
 
+  void generateRemindersForTenant({
+    tenantId: tenant.id,
+    organizationId,
+    ownerId,
+    paymentDueDay: tenant.payment_due_day,
+  }).catch((error) => {
+    console.error('[createOwnerTenant] reminder generation failed', { tenantId: tenant.id, error })
+  })
+
   if (tenant.status === 'active' || Boolean(tenant.lease_start_date)) {
     void ensureMoveInConditionReport({
       organizationId,
@@ -857,12 +866,28 @@ export const removeOwnerBroker = asyncHandler(async (request: Request, response:
 })
 
 export const getOwnerTenantById = asyncHandler(async (request: Request, response: Response) => {
-  const organizationId = requireOrganizationContext(request)
+  const { ownerId, organizationId } = requireOwnerContext(request)
   const tenantId = readPathId(request, 'id')
 
   const detail = await getTenantDetailAggregate(organizationId, tenantId)
   if (!detail) {
     throw new AppError('Tenant not found in your organization', 404)
+  }
+
+  // Auto-generate reminders on first view if none exist yet (covers tenants created before auto-generation was added)
+  if (detail.reminders.length === 0 && detail.tenant.payment_due_day) {
+    try {
+      await generateRemindersForTenant({
+        tenantId,
+        organizationId,
+        ownerId,
+        paymentDueDay: detail.tenant.payment_due_day,
+      })
+      const freshDetail = await getTenantDetailAggregate(organizationId, tenantId)
+      if (freshDetail) return response.json({ ok: true, ...freshDetail })
+    } catch (error) {
+      console.error('[getOwnerTenantById] on-demand reminder generation failed', { tenantId, error })
+    }
   }
 
   response.json({ ok: true, ...detail })
