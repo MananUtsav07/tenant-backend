@@ -1,5 +1,6 @@
 import { addDays, nextDueDateFromDay } from '../utils/date.js'
 import { isReminderGenerationEnabled } from './ai/featureFlags.js'
+import { sendTenantRentReminderEmail } from '../lib/mailer.js'
 import { createOwnerNotification } from './ownerService.js'
 import { createRentReminders, listAllTenantsForOrganization, listOrganizationReminders, markReminderAsSent } from './tenantService.js'
 
@@ -110,6 +111,22 @@ export async function processOwnerReminders(input: { ownerId: string; organizati
         message: `Tenant ${tenant.full_name} (${tenant.tenant_access_id}) has a reminder: ${reminderLabel[reminderType]}.`,
       })
       notificationsCreated += 1
+
+      if (tenant.email) {
+        const dueDate = nextDueDateFromDay(tenant.payment_due_day, now)
+        const dueDateLabel = dueDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
+        const amountLabel = tenant.monthly_rent != null ? `${Number(tenant.monthly_rent).toLocaleString('en-IN')}` : 'As per your lease'
+
+        void sendTenantRentReminderEmail({
+          to: tenant.email,
+          tenantName: tenant.full_name,
+          reminderType,
+          dueDateLabel,
+          amountLabel,
+        }).catch((err: unknown) => {
+          console.error('[reminderService] failed to send rent reminder email', { tenantId: tenant.id, reminderType, err })
+        })
+      }
     }
 
     await markReminderAsSent(reminder.id, input.organizationId)

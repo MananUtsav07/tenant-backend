@@ -901,6 +901,57 @@ export async function sendTenantRentPaymentRejectedEmail(payload: TenantRentPaym
   })
 }
 
+type TenantRentReminderPayload = {
+  to: string
+  tenantName: string
+  reminderType: '1_day_before' | 'due_today' | '3_days_late' | '7_days_late'
+  dueDateLabel: string
+  amountLabel: string
+}
+
+export async function sendTenantRentReminderEmail(payload: TenantRentReminderPayload) {
+  const isOverdue = payload.reminderType === '3_days_late' || payload.reminderType === '7_days_late'
+
+  const titleMap: Record<TenantRentReminderPayload['reminderType'], string> = {
+    '1_day_before': 'Your rent is due tomorrow',
+    due_today: 'Your rent is due today',
+    '3_days_late': 'Your rent is overdue',
+    '7_days_late': 'Your rent is overdue',
+  }
+
+  const introBodyMap: Record<TenantRentReminderPayload['reminderType'], string> = {
+    '1_day_before': 'This is a reminder that your rent payment is due tomorrow.',
+    due_today: 'This is a reminder that your rent payment is due today.',
+    '3_days_late': 'Your rent payment was due 3 days ago and has not yet been received.',
+    '7_days_late': 'Your rent payment is now 7 days overdue. Please settle the outstanding amount as soon as possible.',
+  }
+
+  const content = renderBrandedEmail({
+    eyebrow: isOverdue ? 'Rent Overdue' : 'Rent Reminder',
+    title: titleMap[payload.reminderType],
+    intro: [
+      `Hello ${payload.tenantName},`,
+      introBodyMap[payload.reminderType],
+    ],
+    details: [
+      { label: 'Due Date', value: payload.dueDateLabel },
+      { label: 'Amount Due', value: payload.amountLabel, emphasize: true },
+    ],
+    note: isOverdue
+      ? { title: 'Action required', body: 'Please log in to your resident workspace to submit your payment or contact your property manager.', tone: 'warning' }
+      : { title: 'How to pay', body: 'Log in to your resident workspace and navigate to the Rent section to submit your payment.', tone: 'info' },
+    footer: 'If you have already made a payment, please allow time for it to be confirmed by your property manager.',
+  })
+
+  await transporter.sendMail({
+    from: env.EMAIL_FROM,
+    to: payload.to,
+    subject: titleMap[payload.reminderType],
+    text: content.text,
+    html: content.html,
+  })
+}
+
 export async function sendOwnerEmailVerificationEmail(payload: {
   to: string
   ownerName: string
