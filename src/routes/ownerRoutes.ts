@@ -22,6 +22,7 @@ import {
   getOwnerScreeningOverviewController,
   getOwnerTelegramOnboarding,
   getOwnerTenantById,
+  getOwnerTenantDocumentsController,
   getOwnerTenantConditionReportsController,
   getOwnerTicketById,
   getOwnerTicketMaintenanceWorkflowController,
@@ -41,6 +42,7 @@ import {
   patchOwnerScreeningApplicantDecisionController,
   patchOwnerTicketMaintenanceAssignmentController,
   patchOwnerTenant,
+  patchOwnerTenantDocumentController,
   patchOwnerTicket,
   postOwnerContractorDirectoryController,
   postOwnerTicketMaintenanceQuoteApprovalController,
@@ -63,12 +65,15 @@ import {
   postOwnerTelegramDisconnect,
   putOwnerNotificationPreferencesController,
   postOwnerTenantConditionReportController,
+  postOwnerTenantDocumentController,
+  postOwnerTenantDocumentUploadUrlController,
   processReminders,
   postOwnerBroker,
   putOwnerAutomationSettingsController,
   removeOwnerProperty,
   removeOwnerBroker,
   removeOwnerTenant,
+  removeOwnerTenantDocumentController,
 } from '../controllers/ownerController.js'
 import { requireOwnerAuth } from '../middleware/ownerAuth.js'
 
@@ -91,6 +96,11 @@ export function createOwnerRouter() {
   router.post('/tenants', createOwnerTenant)
   router.get('/tenants', getOwnerTenants)
   router.get('/tenants/:id', getOwnerTenantById)
+  router.get('/tenants/:id/documents', getOwnerTenantDocumentsController)
+  router.post('/tenants/:id/documents/upload-url', postOwnerTenantDocumentUploadUrlController)
+  router.post('/tenants/:id/documents', postOwnerTenantDocumentController)
+  router.patch('/tenants/:id/documents/:documentId', patchOwnerTenantDocumentController)
+  router.delete('/tenants/:id/documents/:documentId', removeOwnerTenantDocumentController)
   router.get('/tenants/:id/condition-reports', getOwnerTenantConditionReportsController)
   router.post('/tenants/:id/condition-reports', postOwnerTenantConditionReportController)
   router.patch('/tenants/:id', patchOwnerTenant)

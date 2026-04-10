@@ -54,6 +54,7 @@ import {
   updateProperty,
   updateTenant,
 } from '../services/ownerService.js'
+import { createTenantDocumentUploadTarget } from '../services/s3StorageService.js'
 import { processOwnerReminders } from '../services/reminderService.js'
 import { listOwnerAwaitingRentPaymentApprovals, reviewOwnerRentPaymentApproval } from '../services/rentPaymentService.js'
 import { getOwnerTicketThread, replyToTicketAsOwner, updateTicketStatusAsOwner } from '../services/ticketThreadService.js'
@@ -133,10 +134,21 @@ import {
   updateConditionReportRoomSchema,
 } from '../validations/conditionReportSchemas.js'
 import { createBrokerSchema, updateBrokerSchema } from '../validations/brokerSchemas.js'
+import {
+  createTenantDocumentSchema,
+  tenantDocumentUploadUrlSchema,
+  updateTenantDocumentSchema,
+} from '../validations/tenantDocumentSchemas.js'
 import { ownerWhatsAppSendOtpSchema, ownerWhatsAppVerifyOtpSchema } from '../validations/authSchemas.js'
 import { normalizeWhatsAppPhone } from '../services/whatsappLinkService.js'
 import { buildOwnerOnboardingMessage, sendOwnerWhatsAppOnboarding } from './authController.js'
 import { getAutomationProviderRegistry } from '../services/automation/providers/providerRegistry.js'
+import {
+  createTenantDocument,
+  deleteTenantDocument,
+  listTenantDocuments,
+  updateTenantDocument,
+} from '../services/tenantDocumentService.js'
 
 type OtpEntry = { code: string; expiresAt: number }
 const otpStore = new Map<string, OtpEntry>()
@@ -853,6 +865,124 @@ export const getOwnerTenantById = asyncHandler(async (request: Request, response
   }
 
   response.json({ ok: true, ...detail })
+})
+
+export const getOwnerTenantDocumentsController = asyncHandler(async (request: Request, response: Response) => {
+  const { ownerId, organizationId } = requireOwnerContext(request)
+  const tenantId = readPathId(request, 'id')
+
+  const documents = await listTenantDocuments({
+    organizationId,
+    ownerId,
+    tenantId,
+  })
+
+  response.json({ ok: true, documents })
+})
+
+export const postOwnerTenantDocumentUploadUrlController = asyncHandler(async (request: Request, response: Response) => {
+  const { ownerId, organizationId } = requireOwnerContext(request)
+  const tenantId = readPathId(request, 'id')
+  const parsed = tenantDocumentUploadUrlSchema.parse(request.body ?? {})
+
+  const tenant = await getTenantForOwner(organizationId, tenantId)
+  if (!tenant) {
+    throw new AppError('Tenant not found in your organization', 404)
+  }
+
+  const upload = await createTenantDocumentUploadTarget({
+    organizationId,
+    tenantId,
+    fileName: parsed.file_name,
+    mimeType: parsed.mime_type ?? null,
+  })
+
+  response.status(201).json({ ok: true, upload })
+})
+
+export const postOwnerTenantDocumentController = asyncHandler(async (request: Request, response: Response) => {
+  const { ownerId, organizationId } = requireOwnerContext(request)
+  const tenantId = readPathId(request, 'id')
+  const parsed = createTenantDocumentSchema.parse(request.body ?? {})
+
+  const document = await createTenantDocument({
+    organizationId,
+    ownerId,
+    tenantId,
+    payload: parsed,
+  })
+
+  await createAuditLog({
+    organization_id: organizationId,
+    actor_id: ownerId,
+    actor_role: 'owner',
+    action: 'tenant_document.created',
+    entity_type: 'tenant_document',
+    entity_id: document.id,
+    metadata: {
+      tenant_id: tenantId,
+      document_type: parsed.document_type,
+      file_name: parsed.file_name,
+    },
+  })
+
+  response.status(201).json({ ok: true, document })
+})
+
+export const patchOwnerTenantDocumentController = asyncHandler(async (request: Request, response: Response) => {
+  const { ownerId, organizationId } = requireOwnerContext(request)
+  const tenantId = readPathId(request, 'id')
+  const documentId = readPathId(request, 'documentId')
+  const parsed = updateTenantDocumentSchema.parse(request.body ?? {})
+
+  if (Object.keys(parsed).length === 0) {
+    throw new AppError('No tenant document fields provided', 400)
+  }
+
+  const document = await updateTenantDocument({
+    organizationId,
+    ownerId,
+    tenantId,
+    documentId,
+    patch: parsed,
+  })
+
+  await createAuditLog({
+    organization_id: organizationId,
+    actor_id: ownerId,
+    actor_role: 'owner',
+    action: 'tenant_document.updated',
+    entity_type: 'tenant_document',
+    entity_id: document.id,
+    metadata: parsed,
+  })
+
+  response.json({ ok: true, document })
+})
+
+export const removeOwnerTenantDocumentController = asyncHandler(async (request: Request, response: Response) => {
+  const { ownerId, organizationId } = requireOwnerContext(request)
+  const tenantId = readPathId(request, 'id')
+  const documentId = readPathId(request, 'documentId')
+
+  await deleteTenantDocument({
+    organizationId,
+    ownerId,
+    tenantId,
+    documentId,
+  })
+
+  await createAuditLog({
+    organization_id: organizationId,
+    actor_id: ownerId,
+    actor_role: 'owner',
+    action: 'tenant_document.deleted',
+    entity_type: 'tenant_document',
+    entity_id: documentId,
+    metadata: { tenant_id: tenantId },
+  })
+
+  response.json({ ok: true })
 })
 
 export const getOwnerTenantConditionReportsController = asyncHandler(async (request: Request, response: Response) => {
