@@ -131,7 +131,8 @@ async function syncApprovedRentLedgerEntry(input: {
     due_date: new Date(input.dueDate),
     amount_due: input.amountPaid,
     amount_paid: input.amountPaid,
-    paid_date: new Date(new Date().toISOString().slice(0, 10)),
+    // Use the later of today or due_date — DB check constraint requires paid_date >= due_date
+    paid_date: new Date(Math.max(Date.now(), new Date(input.dueDate).getTime())),
     status: 'paid',
   }
 
