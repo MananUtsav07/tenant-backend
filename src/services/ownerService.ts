@@ -149,7 +149,25 @@ export async function createProperty(args: {
 }
 
 export async function listProperties(organizationId: string) {
-  return prisma.properties.findMany({ where: { organization_id: organizationId }, orderBy: { created_at: 'desc' } })
+  const properties = await prisma.properties.findMany({
+    where: { organization_id: organizationId },
+    orderBy: { created_at: 'desc' },
+  })
+
+  // Compute occupancy from actual active tenants so the status is always accurate
+  const propertiesWithTenants = await prisma.properties.findMany({
+    where: { organization_id: organizationId },
+    select: {
+      id: true,
+      _count: { select: { tenants: { where: { status: { in: ['active', 'inactive'] } } } } },
+    },
+  })
+  const tenantCountMap = new Map(propertiesWithTenants.map((p) => [p.id, p._count.tenants]))
+
+  return properties.map((p) => ({
+    ...p,
+    occupancy_status: (tenantCountMap.get(p.id) ?? 0) > 0 ? 'occupied' : ('vacant' as string),
+  }))
 }
 
 export async function getPropertyForOwner(organizationId: string, propertyId: string) {
@@ -225,6 +243,13 @@ export async function createTenant(args: {
   })
 
   await upsertTenantWhatsAppLink({ organizationId: args.organizationId, tenantId: data.id, ownerId: args.ownerId, phoneNumber: args.input.phone ?? null, linkedVia: 'tenant_phone' })
+
+  // Sync property occupancy status
+  await prisma.properties.update({
+    where: { id: args.input.property_id },
+    data: { occupancy_status: 'occupied', updated_at: new Date() },
+  })
+
   return data
 }
 
@@ -266,9 +291,21 @@ export async function updateTenant(organizationId: string, tenantId: string, pat
 }
 
 export async function deleteTenant(organizationId: string, tenantId: string) {
-  const existing = await prisma.tenants.findFirst({ where: { id: tenantId, organization_id: organizationId }, select: { id: true } })
+  const existing = await prisma.tenants.findFirst({ where: { id: tenantId, organization_id: organizationId }, select: { id: true, property_id: true } })
   if (!existing) return 0
   await prisma.tenants.delete({ where: { id: tenantId } })
+
+  // Sync property occupancy status — set to vacant if no active tenants remain
+  const remainingCount = await prisma.tenants.count({
+    where: { property_id: existing.property_id, organization_id: organizationId, status: { in: ['active', 'inactive'] } },
+  })
+  if (remainingCount === 0) {
+    await prisma.properties.update({
+      where: { id: existing.property_id },
+      data: { occupancy_status: 'vacant', updated_at: new Date() },
+    })
+  }
+
   return 1
 }
 
