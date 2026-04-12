@@ -713,6 +713,18 @@ export class DefaultWhatsAppProvider implements WhatsAppProvider {
             template: {
               name: input.templateKey,
               language: { code: input.language ?? 'en_US' },
+              // Pass the rendered body as the first (and only) body variable {{1}}.
+              // The registered template must have a single body component with {{1}}.
+              ...(renderedBody
+                ? {
+                    components: [
+                      {
+                        type: 'body',
+                        parameters: [{ type: 'text', text: renderedBody }],
+                      },
+                    ],
+                  }
+                : {}),
             },
           },
         })

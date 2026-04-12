@@ -16,7 +16,7 @@ import { AppError } from '../lib/errors.js'
 import { getOwnerNotificationPreferences } from './ownerNotificationPreferenceService.js'
 import { createOwnerNotification, getOwnerById } from './ownerService.js'
 import { getOwnerTelegramChatLink, getTenantTelegramChatLink, sendTelegramMessageWithRetry } from './telegramService.js'
-import { getOwnerWhatsAppLink, getTenantWhatsAppLink, hasRecentWhatsAppSession } from './whatsappLinkService.js'
+import { getOwnerWhatsAppLink, getTenantWhatsAppLink } from './whatsappLinkService.js'
 
 function normalizeOwnerName(owner: { full_name?: string | null; company_name?: string | null; email: string }) {
   return owner.full_name || owner.company_name || owner.email
@@ -85,33 +85,20 @@ async function sendWhatsAppNotification(input: {
   }
 
   try {
-    // Always attempt freeform delivery. The provider enforces Meta's 24-hour
-    // customer-service window at the API level — passing sessionOpen:true tells
-    // the provider to make the real API call and let Meta decide. This is better
-    // than silently skipping (old session gate) or sending a template name that
-    // was never registered in Meta's dashboard.
-    if (input.actions && input.actions.length > 0) {
-      await getAutomationProviderRegistry().whatsapp.sendActionMessage({
-        recipient,
-        title: input.title,
-        body: input.text,
-        actions: input.actions.slice(0, 3),
-        organizationId: input.organizationId,
-        ownerId: input.ownerId,
-        tenantId: input.tenantId ?? null,
-        policyContext: { sessionOpen: true },
-        metadata: input.metadata,
-      })
-      return
-    }
-
-    await getAutomationProviderRegistry().whatsapp.sendFreeform({
+    // Use a single universal template ('prophives_notification') with the full
+    // message passed as {{1}}. Template messages bypass Meta's 24-hour session
+    // window entirely — they are delivered anytime as long as the template is
+    // approved in Meta Business Manager.
+    // Setup: create one template named 'prophives_notification', category
+    // UTILITY, body text: {{1}}. Get it approved once and all notifications work.
+    await getAutomationProviderRegistry().whatsapp.sendTemplate({
       recipient,
-      text: input.text,
+      templateKey: 'prophives_notification',
+      fallbackText: input.text,
       organizationId: input.organizationId,
       ownerId: input.ownerId,
       tenantId: input.tenantId ?? null,
-      policyContext: { sessionOpen: true },
+      variables: { body: input.text },
       metadata: input.metadata,
     })
   } catch (error) {
