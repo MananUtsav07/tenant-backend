@@ -85,30 +85,17 @@ async function sendWhatsAppNotification(input: {
   }
 
   try {
-    const hasSession = await hasRecentWhatsAppSession({
-      organizationId: input.organizationId,
-      phoneNumber: recipient,
-    })
-
-    if (hasSession) {
-      if (input.actions && input.actions.length > 0) {
-        await getAutomationProviderRegistry().whatsapp.sendActionMessage({
-          recipient,
-          title: input.title,
-          body: input.text,
-          actions: input.actions.slice(0, 3),
-          organizationId: input.organizationId,
-          ownerId: input.ownerId,
-          tenantId: input.tenantId ?? null,
-          policyContext: { sessionOpen: true },
-          metadata: input.metadata,
-        })
-        return
-      }
-
-      await getAutomationProviderRegistry().whatsapp.sendFreeform({
+    // Always attempt freeform delivery. The provider enforces Meta's 24-hour
+    // customer-service window at the API level — passing sessionOpen:true tells
+    // the provider to make the real API call and let Meta decide. This is better
+    // than silently skipping (old session gate) or sending a template name that
+    // was never registered in Meta's dashboard.
+    if (input.actions && input.actions.length > 0) {
+      await getAutomationProviderRegistry().whatsapp.sendActionMessage({
         recipient,
-        text: input.text,
+        title: input.title,
+        body: input.text,
+        actions: input.actions.slice(0, 3),
         organizationId: input.organizationId,
         ownerId: input.ownerId,
         tenantId: input.tenantId ?? null,
@@ -118,16 +105,13 @@ async function sendWhatsAppNotification(input: {
       return
     }
 
-    await getAutomationProviderRegistry().whatsapp.sendTemplate({
+    await getAutomationProviderRegistry().whatsapp.sendFreeform({
       recipient,
-      templateKey: input.templateKey,
-      fallbackText: input.text,
+      text: input.text,
       organizationId: input.organizationId,
       ownerId: input.ownerId,
       tenantId: input.tenantId ?? null,
-      variables: {
-        body: input.text,
-      },
+      policyContext: { sessionOpen: true },
       metadata: input.metadata,
     })
   } catch (error) {
@@ -1005,6 +989,8 @@ export async function notifyTenantRentPaymentReviewed(input: {
 }
 
 export async function notifyTenantMaintenanceScheduled(input: {
+  organizationId: string
+  ownerId: string
   tenantId: string
   tenantEmail: string | null
   tenantName: string
@@ -1022,44 +1008,94 @@ export async function notifyTenantMaintenanceScheduled(input: {
       tenantId: input.tenantId,
       subject: input.subject,
     })
-    return
   }
 
-  try {
-    await sendBrandedMessageEmail({
-      to: tenantEmail,
-      subject: `Contractor Visit Scheduled: ${input.subject}`,
-      preheader: 'Your Prophives property team has scheduled a contractor visit.',
-      eyebrow: 'Maintenance Booking',
-      title: `Contractor visit confirmed for ${input.subject}`,
-      intro: ['A contractor booking has been arranged for your reported issue.'],
-      details: [
-        { label: 'Contractor', value: input.contractorName },
-        { label: 'Property', value: input.propertyName?.trim() || 'Property' },
-        { label: 'Unit', value: input.unitNumber?.trim() || '-' },
-        { label: 'Starts', value: formatDateTimeLabel(input.appointmentStartAt), emphasize: true },
-        { label: 'Ends', value: input.appointmentEndAt ? formatDateTimeLabel(input.appointmentEndAt) : 'TBC' },
-      ],
-      body: [
-        'Please make sure access is available for the scheduled time window.',
-        input.appointmentNotes?.trim() ? `Appointment notes: ${input.appointmentNotes.trim()}` : '',
-      ].filter(Boolean),
-      note: {
-        title: 'Need a change?',
-        body: 'If the appointment time no longer works, reply in your support ticket so the property team can reschedule it.',
-        tone: 'info',
-      },
-    })
-  } catch (error) {
-    console.error('[notifyTenantMaintenanceScheduled] email failed', {
-      tenantId: input.tenantId,
-      subject: input.subject,
-      error,
-    })
+  if (tenantEmail) {
+    try {
+      await sendBrandedMessageEmail({
+        to: tenantEmail,
+        subject: `Contractor Visit Scheduled: ${input.subject}`,
+        preheader: 'Your Prophives property team has scheduled a contractor visit.',
+        eyebrow: 'Maintenance Booking',
+        title: `Contractor visit confirmed for ${input.subject}`,
+        intro: ['A contractor booking has been arranged for your reported issue.'],
+        details: [
+          { label: 'Contractor', value: input.contractorName },
+          { label: 'Property', value: input.propertyName?.trim() || 'Property' },
+          { label: 'Unit', value: input.unitNumber?.trim() || '-' },
+          { label: 'Starts', value: formatDateTimeLabel(input.appointmentStartAt), emphasize: true },
+          { label: 'Ends', value: input.appointmentEndAt ? formatDateTimeLabel(input.appointmentEndAt) : 'TBC' },
+        ],
+        body: [
+          'Please make sure access is available for the scheduled time window.',
+          input.appointmentNotes?.trim() ? `Appointment notes: ${input.appointmentNotes.trim()}` : '',
+        ].filter(Boolean),
+        note: {
+          title: 'Need a change?',
+          body: 'If the appointment time no longer works, reply in your support ticket so the property team can reschedule it.',
+          tone: 'info',
+        },
+      })
+    } catch (error) {
+      console.error('[notifyTenantMaintenanceScheduled] email failed', {
+        tenantId: input.tenantId,
+        subject: input.subject,
+        error,
+      })
+    }
   }
+
+  const scheduledText = [
+    '🔧 Contractor Visit Scheduled',
+    `📝 Ticket: ${input.subject}`,
+    `👷 Contractor: ${input.contractorName}`,
+    `🏠 Property: ${formatPropertyLabel(input.propertyName, input.unitNumber)}`,
+    `📅 Starts: ${formatDateTimeLabel(input.appointmentStartAt)}`,
+    `📅 Ends: ${input.appointmentEndAt ? formatDateTimeLabel(input.appointmentEndAt) : 'TBC'}`,
+    ...(input.appointmentNotes?.trim() ? [`🗒️ Notes: ${truncateText(input.appointmentNotes.trim(), 300)}`] : []),
+    `🔗 View: ${buildFrontendUrl('/tenant/support')}`,
+  ].join('\n')
+
+  try {
+    const telegramLink = await getTenantTelegramChatLink({ organizationId: input.organizationId, tenantId: input.tenantId })
+    if (telegramLink) {
+      await sendTelegramMessageWithRetry({
+        chatId: telegramLink.chat_id,
+        text: scheduledText,
+        logContext: {
+          organizationId: input.organizationId,
+          ownerId: input.ownerId,
+          tenantId: input.tenantId,
+          userRole: 'tenant',
+          eventType: 'maintenance_scheduled',
+        },
+      })
+    }
+  } catch (error) {
+    console.error('[notifyTenantMaintenanceScheduled] telegram failed', { tenantId: input.tenantId, error })
+  }
+
+  await sendTenantWhatsApp({
+    organizationId: input.organizationId,
+    ownerId: input.ownerId,
+    tenantId: input.tenantId,
+    text: [
+      '🔧 Contractor Visit Scheduled',
+      `Ticket: ${input.subject}`,
+      `Contractor: ${input.contractorName}`,
+      `Property: ${formatPropertyLabel(input.propertyName, input.unitNumber)}`,
+      `Starts: ${formatDateTimeLabel(input.appointmentStartAt)}`,
+      `Ends: ${input.appointmentEndAt ? formatDateTimeLabel(input.appointmentEndAt) : 'TBC'}`,
+      ...(input.appointmentNotes?.trim() ? [`Notes: ${truncateText(input.appointmentNotes.trim(), 200)}`] : []),
+    ].join('\n'),
+    templateKey: 'tenant_maintenance_scheduled',
+    metadata: { event: 'whatsapp_maintenance_scheduled' },
+  })
 }
 
 export async function notifyTenantMaintenanceCompleted(input: {
+  organizationId: string
+  ownerId: string
   tenantId: string
   tenantEmail: string | null
   tenantName: string
@@ -1075,39 +1111,85 @@ export async function notifyTenantMaintenanceCompleted(input: {
       tenantId: input.tenantId,
       subject: input.subject,
     })
-    return
   }
 
-  try {
-    await sendBrandedMessageEmail({
-      to: tenantEmail,
-      subject: `Please Confirm Maintenance Completion: ${input.subject}`,
-      preheader: 'Your Prophives property team marked a contractor job as completed.',
-      eyebrow: 'Maintenance Confirmation',
-      title: `Please confirm the work on ${input.subject}`,
-      intro: [`The property team has marked this job as completed by ${input.contractorName}.`],
-      details: [
-        { label: 'Contractor', value: input.contractorName },
-        { label: 'Property', value: input.propertyName?.trim() || 'Property' },
-        { label: 'Unit', value: input.unitNumber?.trim() || '-' },
-      ],
-      body: [
-        input.completionNotes?.trim() ? `Completion notes: ${input.completionNotes.trim()}` : '',
-        'Open the ticket in your tenant dashboard to confirm whether the issue is fully resolved or still needs follow-up.',
-      ].filter(Boolean),
-      note: {
-        title: 'Why this matters',
-        body: 'Your confirmation helps keep the maintenance record accurate and lets the property team know whether more work is needed.',
-        tone: 'info',
-      },
-    })
-  } catch (error) {
-    console.error('[notifyTenantMaintenanceCompleted] email failed', {
-      tenantId: input.tenantId,
-      subject: input.subject,
-      error,
-    })
+  if (tenantEmail) {
+    try {
+      await sendBrandedMessageEmail({
+        to: tenantEmail,
+        subject: `Please Confirm Maintenance Completion: ${input.subject}`,
+        preheader: 'Your Prophives property team marked a contractor job as completed.',
+        eyebrow: 'Maintenance Confirmation',
+        title: `Please confirm the work on ${input.subject}`,
+        intro: [`The property team has marked this job as completed by ${input.contractorName}.`],
+        details: [
+          { label: 'Contractor', value: input.contractorName },
+          { label: 'Property', value: input.propertyName?.trim() || 'Property' },
+          { label: 'Unit', value: input.unitNumber?.trim() || '-' },
+        ],
+        body: [
+          input.completionNotes?.trim() ? `Completion notes: ${input.completionNotes.trim()}` : '',
+          'Open the ticket in your tenant dashboard to confirm whether the issue is fully resolved or still needs follow-up.',
+        ].filter(Boolean),
+        note: {
+          title: 'Why this matters',
+          body: 'Your confirmation helps keep the maintenance record accurate and lets the property team know whether more work is needed.',
+          tone: 'info',
+        },
+      })
+    } catch (error) {
+      console.error('[notifyTenantMaintenanceCompleted] email failed', {
+        tenantId: input.tenantId,
+        subject: input.subject,
+        error,
+      })
+    }
   }
+
+  const completedText = [
+    '✅ Maintenance Job Completed',
+    `📝 Ticket: ${input.subject}`,
+    `👷 Contractor: ${input.contractorName}`,
+    `🏠 Property: ${formatPropertyLabel(input.propertyName, input.unitNumber)}`,
+    ...(input.completionNotes?.trim() ? [`🗒️ Notes: ${truncateText(input.completionNotes.trim(), 300)}`] : []),
+    'Please confirm whether the issue is fully resolved in your tenant dashboard.',
+    `🔗 View: ${buildFrontendUrl('/tenant/support')}`,
+  ].join('\n')
+
+  try {
+    const telegramLink = await getTenantTelegramChatLink({ organizationId: input.organizationId, tenantId: input.tenantId })
+    if (telegramLink) {
+      await sendTelegramMessageWithRetry({
+        chatId: telegramLink.chat_id,
+        text: completedText,
+        logContext: {
+          organizationId: input.organizationId,
+          ownerId: input.ownerId,
+          tenantId: input.tenantId,
+          userRole: 'tenant',
+          eventType: 'maintenance_completed',
+        },
+      })
+    }
+  } catch (error) {
+    console.error('[notifyTenantMaintenanceCompleted] telegram failed', { tenantId: input.tenantId, error })
+  }
+
+  await sendTenantWhatsApp({
+    organizationId: input.organizationId,
+    ownerId: input.ownerId,
+    tenantId: input.tenantId,
+    text: [
+      '✅ Maintenance Job Completed',
+      `Ticket: ${input.subject}`,
+      `Contractor: ${input.contractorName}`,
+      `Property: ${formatPropertyLabel(input.propertyName, input.unitNumber)}`,
+      ...(input.completionNotes?.trim() ? [`Notes: ${truncateText(input.completionNotes.trim(), 200)}`] : []),
+      'Please confirm resolution in your tenant dashboard.',
+    ].join('\n'),
+    templateKey: 'tenant_maintenance_completed',
+    metadata: { event: 'whatsapp_maintenance_completed' },
+  })
 }
 
 export async function notifyOwnerMaintenanceResolution(input: {
@@ -1172,6 +1254,48 @@ export async function notifyOwnerMaintenanceResolution(input: {
       error,
     })
   }
+
+  const telegramText = [
+    input.resolved ? '✅ Maintenance Confirmed by Tenant' : '🔄 Maintenance Follow-up Required',
+    `📝 Ticket: ${input.subject}`,
+    `👤 Tenant: ${input.tenantName} (${input.tenantAccessId})`,
+    `🏠 Property: ${formatPropertyLabel(input.propertyName, input.unitNumber)}`,
+    ...(input.feedbackNote?.trim() ? [`🗒️ Note: ${truncateText(input.feedbackNote.trim(), 400)}`] : []),
+    `🔗 Dashboard: ${buildFrontendUrl('/owner/tickets')}`,
+  ].join('\n')
+
+  try {
+    const telegramLink = await getOwnerTelegramChatLink({ organizationId: input.organizationId, ownerId: input.ownerId })
+    if (telegramLink) {
+      await sendTelegramMessageWithRetry({
+        chatId: telegramLink.chat_id,
+        text: telegramText,
+        logContext: {
+          organizationId: input.organizationId,
+          ownerId: input.ownerId,
+          tenantId: input.tenantId,
+          userRole: 'owner',
+          eventType: input.resolved ? 'maintenance_confirmed' : 'maintenance_follow_up',
+        },
+      })
+    }
+  } catch (error) {
+    console.error('[notifyOwnerMaintenanceResolution] telegram failed', { ownerId: input.ownerId, error })
+  }
+
+  await sendOwnerWhatsApp({
+    organizationId: input.organizationId,
+    ownerId: input.ownerId,
+    text: [
+      input.resolved ? '✅ Maintenance Confirmed by Tenant' : '🔄 Maintenance Follow-up Required',
+      `Ticket: ${input.subject}`,
+      `Tenant: ${input.tenantName} (${input.tenantAccessId})`,
+      `Property: ${formatPropertyLabel(input.propertyName, input.unitNumber)}`,
+      ...(input.feedbackNote?.trim() ? [`Note: ${truncateText(input.feedbackNote.trim(), 300)}`] : []),
+    ].join('\n'),
+    templateKey: input.resolved ? 'owner_maintenance_confirmed' : 'owner_maintenance_followup',
+    metadata: { event: input.resolved ? 'whatsapp_maintenance_confirmed' : 'whatsapp_maintenance_followup' },
+  })
 }
 
 export async function notifyTenantLeasePreferenceSubmitted(input: {
@@ -1250,4 +1374,47 @@ export async function notifyTenantLeasePreferenceSubmitted(input: {
       error,
     })
   }
+
+  const leaseDecisionEmoji = input.decision === 'yes' ? '🔄' : '🚪'
+  const leaseText = [
+    `${leaseDecisionEmoji} Lease Preference Submitted`,
+    `👤 Tenant: ${input.tenantName} (${input.tenantAccessId})`,
+    `🏠 Property: ${formatPropertyLabel(input.propertyName, input.unitNumber)}`,
+    `📅 Lease End: ${formatDateLabel(input.leaseEndDate)}`,
+    `📋 Decision: ${decisionLabel}`,
+    `🔗 Dashboard: ${buildFrontendUrl('/owner/tenants')}`,
+  ].join('\n')
+
+  try {
+    const telegramLink = await getOwnerTelegramChatLink({ organizationId: input.organizationId, ownerId: input.ownerId })
+    if (telegramLink) {
+      await sendTelegramMessageWithRetry({
+        chatId: telegramLink.chat_id,
+        text: leaseText,
+        logContext: {
+          organizationId: input.organizationId,
+          ownerId: input.ownerId,
+          tenantId: input.tenantId,
+          userRole: 'owner',
+          eventType: 'lease_preference_submitted',
+        },
+      })
+    }
+  } catch (error) {
+    console.error('[notifyTenantLeasePreferenceSubmitted] telegram failed', { ownerId: input.ownerId, error })
+  }
+
+  await sendOwnerWhatsApp({
+    organizationId: input.organizationId,
+    ownerId: input.ownerId,
+    text: [
+      `${leaseDecisionEmoji} Lease Preference Submitted`,
+      `Tenant: ${input.tenantName} (${input.tenantAccessId})`,
+      `Property: ${formatPropertyLabel(input.propertyName, input.unitNumber)}`,
+      `Lease End: ${formatDateLabel(input.leaseEndDate)}`,
+      `Decision: ${decisionLabel}`,
+    ].join('\n'),
+    templateKey: 'owner_lease_preference_submitted',
+    metadata: { event: 'whatsapp_lease_preference_submitted', decision: input.decision },
+  })
 }

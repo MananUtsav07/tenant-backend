@@ -1707,6 +1707,8 @@ export const postOwnerTicketMaintenanceQuoteApprovalController = asyncHandler(as
 
   if (maintenance.workflow.assignment.booking_status === 'scheduled') {
     await notifyTenantMaintenanceScheduled({
+      organizationId,
+      ownerId,
       tenantId: maintenance.ticket.tenant_id,
       tenantEmail: maintenance.ticket.tenants?.email ?? null,
       tenantName: maintenance.ticket.tenants?.full_name ?? 'Tenant',
@@ -1762,6 +1764,8 @@ export const patchOwnerTicketMaintenanceAssignmentController = asyncHandler(asyn
 
   if (parsed.booking_status === 'scheduled' && result.overview.workflow.assignment.appointment_start_at) {
     await notifyTenantMaintenanceScheduled({
+      organizationId,
+      ownerId,
       tenantId: result.overview.ticket.tenant_id,
       tenantEmail: result.overview.ticket.tenants?.email ?? null,
       tenantName: result.overview.ticket.tenants?.full_name ?? 'Tenant',
@@ -1777,6 +1781,8 @@ export const patchOwnerTicketMaintenanceAssignmentController = asyncHandler(asyn
 
   if (parsed.booking_status === 'completed') {
     await notifyTenantMaintenanceCompleted({
+      organizationId,
+      ownerId,
       tenantId: result.overview.ticket.tenant_id,
       tenantEmail: result.overview.ticket.tenants?.email ?? null,
       tenantName: result.overview.ticket.tenants?.full_name ?? 'Tenant',
