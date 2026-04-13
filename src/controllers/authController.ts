@@ -18,6 +18,7 @@ import {
 } from '../services/passwordResetService.js'
 import { findTenantByAccessId, getTenantById } from '../services/tenantService.js'
 import { hasRecentWhatsAppSession } from '../services/whatsappLinkService.js'
+import { createTrialSubscription } from '../services/billingService.js'
 import {
   ownerForgotPasswordSchema,
   ownerLoginSchema,
@@ -133,6 +134,9 @@ export const registerOwner = asyncHandler(async (request: Request, response: Res
     ownerName: owner.full_name ?? owner.email,
     verifyUrl,
   }).catch(() => {}) // non-blocking
+
+  // Start 14-day free trial — fire and forget, non-blocking
+  createTrialSubscription({ organizationId: owner.organization_id, ownerId: owner.id }).catch(() => {})
 
   await trackAnalyticsSafe({
     event_name: 'owner_signup',

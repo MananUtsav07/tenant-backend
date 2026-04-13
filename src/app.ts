@@ -15,6 +15,7 @@ import { createOwnerAiRouter } from './routes/ownerAiRoutes.js'
 import { createOwnerRouter } from './routes/ownerRoutes.js'
 import { createPublicRouter } from './routes/publicRoutes.js'
 import { createTenantRouter } from './routes/tenantRoutes.js'
+import { createBillingRouter, createWebhookRouter } from './routes/billingRoutes.js'
 
 const require = createRequire(import.meta.url)
 const helmetImport = require('helmet') as
@@ -101,6 +102,8 @@ export function createApp() {
   app.use('/api/owner', createOwnerAiRouter())
   app.use('/api/owners', createOwnerRouter())
   app.use('/api/tenants', tenantRateLimit, createTenantRouter())
+  app.use('/api/billing', createBillingRouter())
+  app.use('/api/webhooks', createWebhookRouter())
 
   app.use(notFoundHandler)
   app.use(errorHandler)

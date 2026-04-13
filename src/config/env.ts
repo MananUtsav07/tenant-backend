@@ -76,6 +76,9 @@ const envSchema = z.object({
   INTERNAL_AUTOMATION_KEY: optionalNonEmptyString,
   FRONTEND_URL: z.string().url(),
   ALLOWED_ORIGINS: z.string().optional(),
+  RAZORPAY_KEY_ID: optionalNonEmptyString,
+  RAZORPAY_KEY_SECRET: optionalNonEmptyString,
+  RAZORPAY_WEBHOOK_SECRET: optionalNonEmptyString,
 })
 
 const parsed = envSchema.safeParse(process.env)
