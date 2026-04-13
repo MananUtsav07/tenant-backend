@@ -150,6 +150,7 @@ import {
   listTenantDocuments,
   updateTenantDocument,
 } from '../services/tenantDocumentService.js'
+import { getPlanLimits } from '../services/billingService.js'
 
 type OtpEntry = { code: string; expiresAt: number }
 const otpStore = new Map<string, OtpEntry>()
@@ -180,6 +181,15 @@ function readPathId(request: Request, paramName: string): string {
 export const createOwnerProperty = asyncHandler(async (request: Request, response: Response) => {
   const { ownerId, organizationId } = requireOwnerContext(request)
   const parsed = createPropertySchema.parse(request.body)
+
+  const limits = await getPlanLimits(organizationId)
+  if (limits.maxProperties !== Infinity) {
+    const count = await prisma.properties.count({ where: { organization_id: organizationId } })
+    if (count >= limits.maxProperties) {
+      throw new AppError(`Your plan allows up to ${limits.maxProperties} properties. Upgrade to Professional to add more.`, 403)
+    }
+  }
+
   const property = await createProperty({
     ownerId,
     organizationId,
@@ -677,6 +687,14 @@ export const postOwnerScreeningApplicantRefreshController = asyncHandler(async (
 export const createOwnerTenant = asyncHandler(async (request: Request, response: Response) => {
   const { ownerId, organizationId } = requireOwnerContext(request)
   const parsed = createTenantSchema.parse(request.body)
+
+  const limits = await getPlanLimits(organizationId)
+  if (limits.maxTenants !== Infinity) {
+    const count = await prisma.tenants.count({ where: { organization_id: organizationId } })
+    if (count >= limits.maxTenants) {
+      throw new AppError(`Your plan allows up to ${limits.maxTenants} tenants. Upgrade to Professional to add more.`, 403)
+    }
+  }
 
   const property = await getPropertyForOwner(organizationId, parsed.property_id)
   if (!property) {

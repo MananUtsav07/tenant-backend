@@ -107,6 +107,18 @@ export async function initiateSubscription(input: {
   return { ...order, planLabel: PLAN_PRICES[input.planCode].label }
 }
 
+export const PLAN_LIMITS: Record<string, { maxProperties: number; maxTenants: number; whatsapp: boolean; ai: boolean }> = {
+  trial:        { maxProperties: Infinity, maxTenants: Infinity, whatsapp: true,  ai: true  },
+  starter:      { maxProperties: 5,        maxTenants: 10,       whatsapp: false, ai: false },
+  professional: { maxProperties: 25,       maxTenants: 50,       whatsapp: true,  ai: true  },
+}
+
+export async function getPlanLimits(organizationId: string) {
+  const state = await getBillingState(organizationId)
+  const planCode = state.status === 'trialing' && !state.isTrialExpired ? 'trial' : (state.planCode ?? 'starter')
+  return PLAN_LIMITS[planCode] ?? PLAN_LIMITS.starter
+}
+
 export async function confirmSubscription(input: {
   organizationId: string
   ownerId: string
