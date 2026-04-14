@@ -1941,6 +1941,59 @@ export const patchOwnerRentPaymentApproval = asyncHandler(async (request: Reques
   })
 })
 
+export const getOwnerRentLedgerController = asyncHandler(async (request: Request, response: Response) => {
+  const { ownerId, organizationId } = requireOwnerContext(request)
+  const tenantId = request.query.tenant_id as string | undefined
+
+  const entries = await prisma.rent_ledger.findMany({
+    where: {
+      owner_id: ownerId,
+      organization_id: organizationId,
+      ...(tenantId ? { tenant_id: tenantId } : {}),
+    },
+    select: {
+      id: true,
+      owner_id: true,
+      tenant_id: true,
+      property_id: true,
+      cycle_year: true,
+      cycle_month: true,
+      due_date: true,
+      amount_due: true,
+      amount_paid: true,
+      paid_date: true,
+      status: true,
+      created_at: true,
+      tenants: { select: { full_name: true, tenant_access_id: true } },
+      properties: { select: { property_name: true, unit_number: true } },
+    },
+    orderBy: [{ cycle_year: 'desc' }, { cycle_month: 'desc' }, { created_at: 'desc' }],
+    take: 200,
+  })
+
+  response.json({
+    ok: true,
+    entries: entries.map(e => ({
+      id: e.id,
+      owner_id: e.owner_id ?? '',
+      tenant_id: e.tenant_id ?? '',
+      property_id: e.property_id ?? '',
+      cycle_year: e.cycle_year,
+      cycle_month: e.cycle_month,
+      due_date: e.due_date instanceof Date ? e.due_date.toISOString().slice(0, 10) : String(e.due_date),
+      amount_due: Number(e.amount_due ?? 0),
+      amount_paid: Number(e.amount_paid ?? 0),
+      paid_date: e.paid_date instanceof Date ? e.paid_date.toISOString() : (e.paid_date ? String(e.paid_date) : null),
+      status: e.status as string,
+      created_at: e.created_at instanceof Date ? e.created_at.toISOString() : String(e.created_at),
+      tenant_name: (e.tenants as { full_name?: string | null } | null)?.full_name ?? null,
+      tenant_access_id: (e.tenants as { tenant_access_id?: string | null } | null)?.tenant_access_id ?? null,
+      property_name: (e.properties as { property_name?: string | null } | null)?.property_name ?? null,
+      unit_number: (e.properties as { unit_number?: string | null } | null)?.unit_number ?? null,
+    })),
+  })
+})
+
 export const processReminders = asyncHandler(async (request: Request, response: Response) => {
   const { ownerId, organizationId } = requireOwnerContext(request)
   const result = await processOwnerReminders({
