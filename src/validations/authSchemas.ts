@@ -31,6 +31,25 @@ export const ownerUpdateMeSchema = z
   })
   .strict()
 
+export const ownerDeleteMeSchema = z
+  .object({
+    confirmation_text: z.string().trim().min(1).max(120),
+    reasons: z
+      .array(
+        z.enum([
+          'not_satisfied',
+          'missing_features',
+          'too_expensive',
+          'switching_platform',
+          'temporary_use_only',
+          'other',
+        ]),
+      )
+      .min(1)
+      .max(6),
+  })
+  .strict()
+
 export const tenantLoginSchema = z
   .object({
     tenant_access_id: z.string().trim().min(4),

@@ -989,3 +989,43 @@ export async function sendOwnerEmailVerificationEmail(payload: {
     html: content.html,
   })
 }
+type OwnerDeletionSurveyNotificationPayload = {
+  to: string
+  ownerId: string
+  organizationId: string
+  ownerName: string
+  ownerEmail: string
+  companyName: string | null
+  organizationName: string | null
+  createdAt: string
+  deletedAt: string
+  confirmationText: string
+  reasons: string[]
+}
+
+export async function sendOwnerDeletionSurveyNotification(payload: OwnerDeletionSurveyNotificationPayload) {
+  const reasonsBlock = payload.reasons.length > 0 ? payload.reasons.map((reason, index) => `${index + 1}. ${reason}`).join('\n') : 'No reasons selected'
+
+  await transporter.sendMail({
+    from: env.EMAIL_FROM,
+    to: payload.to,
+    subject: `Owner account deleted: ${payload.ownerName}`,
+    text: [
+      'An owner deleted their Prophives account from the website.',
+      '',
+      `Owner ID: ${payload.ownerId}`,
+      `Organization ID: ${payload.organizationId}`,
+      `Owner Name: ${payload.ownerName}`,
+      `Owner Email: ${payload.ownerEmail}`,
+      `Company Name: ${payload.companyName?.trim() || 'Not provided'}`,
+      `Organization Name: ${payload.organizationName?.trim() || 'Not provided'}`,
+      `Created At: ${payload.createdAt}`,
+      `Deleted At: ${payload.deletedAt}`,
+      `Confirmation Text: ${payload.confirmationText}`,
+      '',
+      'Selected Reasons:',
+      reasonsBlock,
+    ].join('\n'),
+  })
+}
+

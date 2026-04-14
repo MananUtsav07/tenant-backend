@@ -4,7 +4,7 @@ import type { Request, Response } from 'express'
 
 import { AppError, asyncHandler } from '../lib/errors.js'
 import { signOwnerToken, signTenantToken } from '../lib/jwt.js'
-import { sendOwnerEmailVerificationEmail } from '../lib/mailer.js'
+import { sendOwnerDeletionSurveyNotification, sendOwnerEmailVerificationEmail } from '../lib/mailer.js'
 import { prisma } from '../lib/db.js'
 import { env } from '../config/env.js'
 import { createAnalyticsEvent } from '../services/analyticsService.js'
@@ -20,6 +20,7 @@ import { findTenantByAccessId, getTenantById } from '../services/tenantService.j
 import { hasRecentWhatsAppSession } from '../services/whatsappLinkService.js'
 import { createTrialSubscription } from '../services/billingService.js'
 import {
+  ownerDeleteMeSchema,
   ownerForgotPasswordSchema,
   ownerLoginSchema,
   ownerRegisterSchema,
@@ -31,6 +32,15 @@ import {
 
 const passwordResetRequestSuccessMessage =
   'If the account details match our records, a password reset email will arrive shortly.'
+
+const ownerDeletionReasonLabels: Record<string, string> = {
+  not_satisfied: 'Not satisfied',
+  missing_features: 'Need better features',
+  too_expensive: 'Too expensive',
+  switching_platform: 'Switching platform',
+  temporary_use_only: 'Temporary use only',
+  other: 'Other reason',
+}
 
 async function trackAnalyticsSafe(input: {
   event_name: string
@@ -340,6 +350,82 @@ export const patchOwnerMe = asyncHandler(async (request: Request, response: Resp
   })
 })
 
+export const deleteOwnerMe = asyncHandler(async (request: Request, response: Response) => {
+  const ownerId = request.owner?.ownerId
+  const organizationId = request.owner?.organizationId
+  if (!ownerId || !organizationId) {
+    throw new AppError('Owner authentication required', 401)
+  }
+
+  const parsed = ownerDeleteMeSchema.parse(request.body ?? {})
+  const owner = await prisma.owners.findFirst({
+    where: {
+      id: ownerId,
+      organization_id: organizationId,
+    },
+    select: {
+      id: true,
+      email: true,
+      full_name: true,
+      company_name: true,
+      created_at: true,
+      organization_id: true,
+      organizations: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
+    },
+  })
+
+  if (!owner) {
+    throw new AppError('Owner not found', 404)
+  }
+
+  const normalizedConfirmation = parsed.confirmation_text.trim().toLowerCase()
+  const acceptedNameVariants = [owner.full_name, owner.company_name]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .map((value) => value.trim().toLowerCase())
+
+  const isDeletePhrase = normalizedConfirmation === 'delete my account'
+  const isOwnerName = acceptedNameVariants.includes(normalizedConfirmation)
+
+  if (!isDeletePhrase && !isOwnerName) {
+    throw new AppError('Type your name or DELETE MY ACCOUNT to confirm deletion', 400)
+  }
+
+  const deletedAt = new Date()
+
+  await prisma.owners.delete({
+    where: { id: owner.id },
+  })
+
+  void sendOwnerDeletionSurveyNotification({
+    to: env.EMAIL_USER,
+    ownerId: owner.id,
+    organizationId: owner.organization_id,
+    ownerName: owner.full_name?.trim() || owner.company_name?.trim() || owner.email,
+    ownerEmail: owner.email,
+    companyName: owner.company_name ?? null,
+    organizationName: owner.organizations?.name ?? null,
+    createdAt: owner.created_at.toISOString(),
+    deletedAt: deletedAt.toISOString(),
+    confirmationText: parsed.confirmation_text.trim(),
+    reasons: parsed.reasons.map((reason) => ownerDeletionReasonLabels[reason] ?? reason),
+  }).catch((error) => {
+    console.error('[owner-account-deletion-email-failed]', {
+      owner_id: owner.id,
+      organization_id: owner.organization_id,
+      error,
+    })
+  })
+
+  response.json({
+    ok: true,
+    message: 'Your account has been deleted permanently.',
+  })
+})
 export const loginTenant = asyncHandler(async (request: Request, response: Response) => {
   const parsed = tenantLoginSchema.parse(request.body)
 
@@ -559,3 +645,4 @@ export const resendOwnerEmailVerification = asyncHandler(async (request: Request
 
   response.json({ ok: true, message: 'Verification email sent. Please check your inbox.' })
 })
+

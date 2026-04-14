@@ -1,6 +1,7 @@
 import { Router } from 'express'
 
 import {
+  deleteOwnerMe,
   loginOwner,
   loginTenant,
   ownerMe,
@@ -26,6 +27,7 @@ export function createAuthRouter() {
   router.post('/owner/reset-password', postOwnerResetPassword)
   router.get('/owner/me', requireOwnerAuth, ownerMe)
   router.patch('/owner/me', requireOwnerAuth, patchOwnerMe)
+  router.delete('/owner/me', requireOwnerAuth, deleteOwnerMe)
   router.get('/owner/verify-email', verifyOwnerEmail)
   router.post('/owner/resend-verification', requireOwnerAuth, resendOwnerEmailVerification)
 
