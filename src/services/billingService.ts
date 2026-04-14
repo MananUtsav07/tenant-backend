@@ -108,9 +108,9 @@ export async function initiateSubscription(input: {
 }
 
 export const PLAN_LIMITS: Record<string, { maxProperties: number; maxTenants: number; whatsapp: boolean; ai: boolean }> = {
-  trial:        { maxProperties: Infinity, maxTenants: Infinity, whatsapp: true,  ai: true  },
-  starter:      { maxProperties: 5,        maxTenants: 10,       whatsapp: false, ai: false },
-  professional: { maxProperties: 25,       maxTenants: 50,       whatsapp: true,  ai: true  },
+  trial:        { maxProperties: 5,  maxTenants: 10, whatsapp: false, ai: false },
+  starter:      { maxProperties: 5,  maxTenants: 10, whatsapp: false, ai: false },
+  professional: { maxProperties: 25, maxTenants: 50, whatsapp: true,  ai: true  },
 }
 
 export async function getPlanLimits(organizationId: string) {
