@@ -29,9 +29,9 @@ export async function createRazorpayOrder(input: {
   const razorpay = getRazorpayClient()
   const plan = PLAN_PRICES[input.planCode]
 
-  // For Beyond plan compute per-property amount dynamically
+  // For Beyond plan: $25 base (21 props) + $1.50 per additional property
   const amount = input.planCode === 'beyond'
-    ? Math.max(21, input.propertyCount ?? 21) * 150  // 150 cents = $1.50
+    ? 2500 + Math.max(0, (input.propertyCount ?? 21) - 21) * 150
     : plan.amount
 
   const order = await razorpay.orders.create({

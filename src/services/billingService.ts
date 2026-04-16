@@ -111,7 +111,7 @@ export async function initiateSubscription(input: {
 
   const count = input.planCode === 'beyond' ? Math.max(21, input.propertyCount ?? 21) : null
   const planLabel = input.planCode === 'beyond' && count !== null
-    ? `$${(count * 1.5).toFixed(2)}/mo (${count} properties)`
+    ? `$${(25 + Math.max(0, count - 21) * 1.5).toFixed(2)}/mo (${count} properties)`
     : PLAN_PRICES[input.planCode].label
   return { ...order, planLabel }
 }
