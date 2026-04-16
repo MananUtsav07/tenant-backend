@@ -189,10 +189,33 @@ export async function patchOrganizationPlan(organizationId: string, planCode: st
   const plan = await prisma.plans.findFirst({ where: { plan_code: planCode } })
   if (!plan) return null
 
+  const now = new Date()
+  const nextPeriodEnd = new Date(now)
+  nextPeriodEnd.setMonth(nextPeriodEnd.getMonth() + 1)
+
+  const isTrial = planCode === 'trial'
+
+  // Update organizations table
   const updated = await prisma.organizations.update({
     where: { id: organizationId },
     data: { plan_code: planCode },
     select: { id: true, name: true, slug: true, plan_code: true },
   })
+
+  // Also sync the subscriptions table so billing state reflects the change
+  const existingSub = await prisma.subscriptions.findFirst({ where: { organization_id: organizationId } })
+  if (existingSub) {
+    await prisma.subscriptions.update({
+      where: { id: existingSub.id },
+      data: {
+        plan_code: planCode,
+        status: isTrial ? 'trialing' : 'active',
+        current_period_start: isTrial ? existingSub.current_period_start : now,
+        current_period_end: isTrial ? existingSub.current_period_end : nextPeriodEnd,
+        updated_at: now,
+      },
+    })
+  }
+
   return updated
 }

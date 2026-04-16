@@ -45,7 +45,7 @@ export async function createOrganization(input: {
     data: {
       name: input.name,
       slug,
-      plan_code: input.plan_code ?? 'starter',
+      plan_code: input.plan_code ?? 'trial',
       country_code: input.country_code ?? 'IN',
       currency_code: input.currency_code ?? 'INR',
       created_at: input.created_at ?? new Date().toISOString(),
