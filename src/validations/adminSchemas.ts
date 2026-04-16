@@ -15,6 +15,11 @@ const baseListQuerySchema = z.object({
 
 export const adminOwnerListQuerySchema = baseListQuerySchema.extend({
   sort_by: z.enum(['created_at', 'email', 'full_name', 'company_name']).default('created_at'),
+  plan_code: z.string().trim().max(50).optional(),
+})
+
+export const adminPatchOrganizationPlanSchema = z.object({
+  plan_code: z.string().trim().min(1).max(50),
 })
 
 export const adminTenantListQuerySchema = baseListQuerySchema.extend({

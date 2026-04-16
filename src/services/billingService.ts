@@ -9,6 +9,7 @@ export type SubscriptionStatus = 'trialing' | 'active' | 'past_due' | 'cancelled
 export interface BillingState {
   status: SubscriptionStatus
   planCode: string | null
+  planDisplayName: string
   trialEndsAt: string | null
   currentPeriodEnd: string | null
   daysLeftInTrial: number | null
@@ -48,6 +49,7 @@ export async function getBillingState(organizationId: string): Promise<BillingSt
     return {
       status: 'inactive',
       planCode: null,
+      planDisplayName: 'Free Trial',
       trialEndsAt: null,
       currentPeriodEnd: null,
       daysLeftInTrial: null,
@@ -74,6 +76,7 @@ export async function getBillingState(organizationId: string): Promise<BillingSt
   return {
     status: subscription.status as SubscriptionStatus,
     planCode: subscription.plan_code,
+    planDisplayName: getPlanDisplayName(subscription.plan_code),
     trialEndsAt: periodEnd?.toISOString() ?? null,
     currentPeriodEnd: periodEnd?.toISOString() ?? null,
     daysLeftInTrial,
@@ -88,11 +91,13 @@ export async function initiateSubscription(input: {
   ownerId: string
   ownerEmail: string
   planCode: RazorpayPlanCode
+  propertyCount?: number
 }): Promise<{ orderId: string; amount: number; currency: string; keyId: string; planLabel: string }> {
   const order = await createRazorpayOrder({
     planCode: input.planCode,
     organizationId: input.organizationId,
     ownerEmail: input.ownerEmail,
+    propertyCount: input.propertyCount,
   })
 
   // Store order ID on the subscription record
@@ -104,19 +109,36 @@ export async function initiateSubscription(input: {
     },
   })
 
-  return { ...order, planLabel: PLAN_PRICES[input.planCode].label }
+  const count = input.planCode === 'beyond' ? Math.max(21, input.propertyCount ?? 21) : null
+  const planLabel = input.planCode === 'beyond' && count !== null
+    ? `$${(count * 1.5).toFixed(2)}/mo (${count} properties)`
+    : PLAN_PRICES[input.planCode].label
+  return { ...order, planLabel }
 }
 
-export const PLAN_LIMITS: Record<string, { maxProperties: number; maxTenants: number; whatsapp: boolean; ai: boolean }> = {
-  trial:        { maxProperties: 5,  maxTenants: 10, whatsapp: false, ai: false },
-  starter:      { maxProperties: 5,  maxTenants: 10, whatsapp: false, ai: false },
-  professional: { maxProperties: 25, maxTenants: 50, whatsapp: true,  ai: true  },
+export const PLAN_LIMITS: Record<string, { maxProperties: number; maxTenants: number; whatsapp: boolean; telegram: boolean; ai: boolean; aiAdvanced: boolean }> = {
+  trial:    { maxProperties: 3,   maxTenants: 15,  whatsapp: false, telegram: false, ai: false, aiAdvanced: false },
+  starter:  { maxProperties: 3,   maxTenants: 15,  whatsapp: false, telegram: false, ai: false, aiAdvanced: false },
+  standard: { maxProperties: 10,  maxTenants: 999, whatsapp: true,  telegram: true,  ai: true,  aiAdvanced: false },
+  plus:     { maxProperties: 20,  maxTenants: 999, whatsapp: true,  telegram: true,  ai: true,  aiAdvanced: true  },
+  beyond:   { maxProperties: 999, maxTenants: 999, whatsapp: true,  telegram: true,  ai: true,  aiAdvanced: true  },
+}
+
+export function getPlanDisplayName(planCode: string | null): string {
+  switch (planCode) {
+    case 'trial':    return 'Free Trial'
+    case 'starter':  return 'Starter'
+    case 'standard': return 'Standard'
+    case 'plus':     return 'Plus'
+    case 'beyond':   return 'Beyond'
+    default:         return 'Free Trial'
+  }
 }
 
 export async function getPlanLimits(organizationId: string) {
   const state = await getBillingState(organizationId)
   const planCode = state.status === 'trialing' && !state.isTrialExpired ? 'trial' : (state.planCode ?? 'starter')
-  return PLAN_LIMITS[planCode] ?? PLAN_LIMITS.starter
+  return PLAN_LIMITS[planCode] ?? PLAN_LIMITS['starter']
 }
 
 export async function confirmSubscription(input: {

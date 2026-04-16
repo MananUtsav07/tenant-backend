@@ -25,6 +25,8 @@ import {
   listAdminProperties,
   listAdminTenants,
   listAdminTickets,
+  listPlans,
+  patchOrganizationPlan,
 } from '../services/adminService.js'
 import { createAnalyticsEvent } from '../services/analyticsService.js'
 import { createBlogPost, deleteBlogPost, listBlogPosts, updateBlogPost } from '../services/blogService.js'
@@ -40,6 +42,7 @@ import {
   adminTenantListQuerySchema,
   adminTicketListQuerySchema,
   adminOrganizationListQuerySchema,
+  adminPatchOrganizationPlanSchema,
 } from '../validations/adminSchemas.js'
 import { adminBlogListQuerySchema, createBlogPostSchema, updateBlogPostSchema } from '../validations/blogSchemas.js'
 import {
@@ -711,4 +714,32 @@ export const deleteAdminBlogPostById = asyncHandler(async (request: Request, res
   response.json({
     ok: true,
   })
+})
+
+export const getAdminPlans = asyncHandler(async (_request: Request, response: Response) => {
+  const plans = await listPlans()
+  response.json({ ok: true, plans })
+})
+
+export const patchAdminOrganizationPlan = asyncHandler(async (request: Request, response: Response) => {
+  const adminId = requireAdminId(request)
+  const organizationId = readPathId(request, 'id')
+  const parsed = adminPatchOrganizationPlanSchema.parse(request.body)
+
+  const updated = await patchOrganizationPlan(organizationId, parsed.plan_code)
+  if (!updated) {
+    throw new AppError('Organization or plan not found', 404)
+  }
+
+  await createAuditLog({
+    organization_id: organizationId,
+    actor_id: adminId,
+    actor_role: 'admin',
+    action: 'organization.plan_changed',
+    entity_type: 'organization',
+    entity_id: organizationId,
+    metadata: { plan_code: parsed.plan_code },
+  })
+
+  response.json({ ok: true, organization: updated })
 })

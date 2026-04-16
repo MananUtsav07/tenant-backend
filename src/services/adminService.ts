@@ -44,10 +44,11 @@ export async function getAdminById(adminId: string) {
   return prisma.admin_users.findFirst({ select: { id: true, email: true, full_name: true, created_at: true }, where: { id: adminId } })
 }
 
-export async function listAdminOwners(query: BaseListQuery<OwnerListSortBy>) {
+export async function listAdminOwners(query: BaseListQuery<OwnerListSortBy> & { plan_code?: string }) {
   const skip = (query.page - 1) * query.page_size
   const where: Prisma.ownersWhereInput = {}
   if (query.organization_id) where.organization_id = query.organization_id
+  if (query.plan_code) where.organizations = { plan_code: query.plan_code }
   if (query.search?.trim()) {
     const e = escapeSearchTerm(query.search)
     if (e) where.OR = [{ email: { contains: e, mode: 'insensitive' } }, { full_name: { contains: e, mode: 'insensitive' } }, { company_name: { contains: e, mode: 'insensitive' } }]
@@ -178,4 +179,20 @@ export async function getSystemHealthMetrics() {
   await prisma.owners.count()
   const dbLatencyMs = Date.now() - start
   return { status: 'ok', uptime_seconds: Math.round(process.uptime()), node_version: process.version, memory: { rss: process.memoryUsage().rss, heap_total: process.memoryUsage().heapTotal, heap_used: process.memoryUsage().heapUsed }, database: { status: 'ok', latency_ms: dbLatencyMs }, generated_at: new Date().toISOString() }
+}
+
+export async function listPlans() {
+  return prisma.plans.findMany({ select: { plan_code: true, plan_name: true, monthly_price: true }, orderBy: { monthly_price: 'asc' } })
+}
+
+export async function patchOrganizationPlan(organizationId: string, planCode: string) {
+  const plan = await prisma.plans.findFirst({ where: { plan_code: planCode } })
+  if (!plan) return null
+
+  const updated = await prisma.organizations.update({
+    where: { id: organizationId },
+    data: { plan_code: planCode, updated_at: new Date() } as never,
+    select: { id: true, name: true, slug: true, plan_code: true },
+  })
+  return updated
 }

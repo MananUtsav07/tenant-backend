@@ -4,10 +4,11 @@ import { AppError, asyncHandler } from '../lib/errors.js'
 import { getBillingState, initiateSubscription, confirmSubscription } from '../services/billingService.js'
 import { verifyRazorpayWebhookSignature } from '../services/razorpayService.js'
 
-const planCodeSchema = z.enum(['starter', 'professional'])
+const planCodeSchema = z.enum(['starter', 'standard', 'plus', 'beyond'])
 
 const initiateSchema = z.object({
   plan_code: planCodeSchema,
+  property_count: z.number().int().min(21).optional(),
 })
 
 const confirmSchema = z.object({
@@ -25,13 +26,14 @@ export const getBillingStateController = asyncHandler(async (request: Request, r
 
 export const initiateSubscriptionController = asyncHandler(async (request: Request, response: Response) => {
   const { organizationId, ownerId, email } = request.owner!
-  const { plan_code } = initiateSchema.parse(request.body)
+  const { plan_code, property_count } = initiateSchema.parse(request.body)
 
   const order = await initiateSubscription({
     organizationId,
     ownerId,
     ownerEmail: email,
     planCode: plan_code,
+    propertyCount: property_count,
   })
 
   response.json({ ok: true, order })

@@ -8,6 +8,10 @@ import { updateOrganizationAiSettingsSchema } from '../validations/aiSchemas.js'
 import { env } from '../config/env.js'
 import { classifyTicketIntent } from '../services/ai/intentClassifier.js'
 import { summarizeTicket } from '../services/ai/ticketSummarizer.js'
+import { draftTicketReply } from '../services/ai/replyDrafter.js'
+import { draftBroadcastMessage } from '../services/ai/broadcastDrafter.js'
+import { draftWhatsappMessage } from '../services/ai/whatsappDrafter.js'
+import { generateLeaseDigest } from '../services/ai/leaseDigest.js'
 import {
   createOwnerTelegramConnectUrl,
   getOwnerTelegramConnectionState,
@@ -148,5 +152,99 @@ export const postOwnerTicketSummarize = asyncHandler(async (request: Request, re
   }
 
   response.json({ ok: true, summary: result })
+})
+
+export const postOwnerDraftTicketReply = asyncHandler(async (request: Request, response: Response) => {
+  requireOwnerContext(request)
+  const { ticket_id, subject, message, updates, tenant_name, property_name } = request.body as {
+    ticket_id?: string
+    subject: string
+    message: string
+    updates?: Array<{ timestamp: string; author: string; message: string }>
+    tenant_name?: string
+    property_name?: string
+  }
+
+  const result = await draftTicketReply({ subject, message, updates, tenantName: tenant_name, propertyName: property_name })
+
+  if (result === null) {
+    response.json({ ok: false, reason: 'AI reply drafting not available or not configured' })
+    return
+  }
+
+  void ticket_id
+  response.json({ ok: true, draft: result })
+})
+
+export const postOwnerDraftBroadcast = asyncHandler(async (request: Request, response: Response) => {
+  const { organizationId } = requireOwnerContext(request)
+  const { topic } = request.body as { topic: string }
+
+  void organizationId
+  const result = await draftBroadcastMessage({ topic })
+
+  if (result === null) {
+    response.json({ ok: false, reason: 'AI broadcast drafting not available or not configured' })
+    return
+  }
+
+  response.json({ ok: true, draft: result })
+})
+
+export const postOwnerDraftWhatsapp = asyncHandler(async (request: Request, response: Response) => {
+  requireOwnerContext(request)
+  const { intent, tenant_name } = request.body as { intent: string; tenant_name: string }
+
+  const result = await draftWhatsappMessage({ intent, tenantName: tenant_name })
+
+  if (result === null) {
+    response.json({ ok: false, reason: 'AI WhatsApp drafting not available or not configured' })
+    return
+  }
+
+  response.json({ ok: true, draft: result })
+})
+
+export const postOwnerLeaseDigest = asyncHandler(async (request: Request, response: Response) => {
+  requireOwnerContext(request)
+  const { tenants } = request.body as {
+    tenants: Array<{ name: string; lease_end_date: string | null; payment_status: string; monthly_rent: number }>
+  }
+
+  const now = new Date()
+  const in60Days = new Date(now.getTime() + 60 * 24 * 60 * 60 * 1000)
+
+  const expiring = tenants.filter((t) => {
+    if (!t.lease_end_date) return false
+    const end = new Date(t.lease_end_date)
+    return end >= now && end <= in60Days
+  })
+
+  const overdue = tenants.filter((t) => t.payment_status === 'overdue')
+
+  const detailLines = tenants.map((t) => {
+    const leaseEnd = t.lease_end_date ? new Date(t.lease_end_date).toDateString() : 'N/A'
+    return `- ${t.name}: lease ends ${leaseEnd}, rent status: ${t.payment_status}`
+  })
+
+  const result = await generateLeaseDigest({
+    expiringCount: expiring.length,
+    overdueCount: overdue.length,
+    tenantDetails: detailLines.join('\n'),
+  })
+
+  if (result === null) {
+    response.json({ ok: false, reason: 'AI lease digest not available or not configured' })
+    return
+  }
+
+  response.json({
+    ok: true,
+    digest: {
+      ...result,
+      expiring_count: expiring.length,
+      overdue_count: overdue.length,
+    },
+  })
 })
 

@@ -21,12 +21,14 @@ import {
   getAdminOrganizationById,
   getAdminOrganizations,
   getAdminOwners,
+  getAdminPlans,
   getAdminProperties,
   getAdminSystemHealth,
   getAdminTicketById,
   getAdminTenants,
   getAdminTickets,
   loginAdmin,
+  patchAdminOrganizationPlan,
   patchAdminTicket,
   postAdminTelegramMaintenanceCleanup,
   postAdminBlogPost,
@@ -46,8 +48,10 @@ export function createAdminRouter() {
   router.get('/me', adminMe)
   router.get('/dashboard-summary', getAdminDashboard)
   router.get('/owners', getAdminOwners)
+  router.get('/plans', getAdminPlans)
   router.get('/organizations', getAdminOrganizations)
   router.get('/organizations/:id', getAdminOrganizationById)
+  router.patch('/organizations/:id/plan', patchAdminOrganizationPlan)
   router.get('/tenants', getAdminTenants)
   router.get('/properties', getAdminProperties)
   router.get('/tickets', getAdminTickets)

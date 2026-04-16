@@ -10,36 +10,45 @@ function getRazorpayClient(): Razorpay {
   return new Razorpay({ key_id: env.RAZORPAY_KEY_ID, key_secret: env.RAZORPAY_KEY_SECRET })
 }
 
-export type RazorpayPlanCode = 'starter' | 'professional'
+export type RazorpayPlanCode = 'starter' | 'standard' | 'plus' | 'beyond'
 
-// Prices in paise (INR) and cents (USD) — Razorpay uses smallest currency unit
+// Prices in USD cents — Razorpay uses smallest currency unit
 export const PLAN_PRICES: Record<RazorpayPlanCode, { amount: number; currency: string; label: string }> = {
-  starter:      { amount: 249900, currency: 'INR', label: '₹2,499/mo' },
-  professional: { amount: 829900, currency: 'INR', label: '₹8,299/mo' },
+  starter:  { amount: 600,  currency: 'USD', label: '$6/mo' },
+  standard: { amount: 1200, currency: 'USD', label: '$12/mo' },
+  plus:     { amount: 2000, currency: 'USD', label: '$20/mo' },
+  beyond:   { amount: 3000, currency: 'USD', label: '$30/mo' },
 }
 
 export async function createRazorpayOrder(input: {
   planCode: RazorpayPlanCode
   organizationId: string
   ownerEmail: string
+  propertyCount?: number  // only used for 'beyond' plan (min 21, $1.50/property)
 }): Promise<{ orderId: string; amount: number; currency: string; keyId: string }> {
   const razorpay = getRazorpayClient()
   const plan = PLAN_PRICES[input.planCode]
 
+  // For Beyond plan compute per-property amount dynamically
+  const amount = input.planCode === 'beyond'
+    ? Math.max(21, input.propertyCount ?? 21) * 150  // 150 cents = $1.50
+    : plan.amount
+
   const order = await razorpay.orders.create({
-    amount: plan.amount,
+    amount,
     currency: plan.currency,
     receipt: `org_${input.organizationId.slice(0, 8)}`,
     notes: {
       organization_id: input.organizationId,
       plan_code: input.planCode,
       owner_email: input.ownerEmail,
+      ...(input.planCode === 'beyond' ? { property_count: String(input.propertyCount ?? 21) } : {}),
     },
   })
 
   return {
     orderId: order.id,
-    amount: plan.amount,
+    amount,
     currency: plan.currency,
     keyId: env.RAZORPAY_KEY_ID!,
   }
