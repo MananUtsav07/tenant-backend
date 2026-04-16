@@ -212,7 +212,6 @@ export async function patchOrganizationPlan(organizationId: string, planCode: st
         status: isTrial ? 'trialing' : 'active',
         current_period_start: isTrial ? existingSub.current_period_start : now,
         current_period_end: isTrial ? existingSub.current_period_end : nextPeriodEnd,
-        updated_at: now,
       },
     })
   }
