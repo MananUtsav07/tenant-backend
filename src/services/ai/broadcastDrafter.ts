@@ -28,7 +28,7 @@ export async function draftBroadcastMessage(input: BroadcastDraftInput): Promise
         {
           role: 'system',
           content:
-            'You are a property manager composing a broadcast message to send to all tenants. Write a clear, professional message based on the owner\'s topic. Keep it under 80 words. Friendly but professional tone. Do not include placeholders. Write the message body only — no subject line.',
+            'You are a property manager composing a broadcast message to send to tenants. Write a clear, professional message based ONLY on the details the owner provides — do not invent times, dates, durations, or any other details not mentioned. Start the message with "Dear [Tenant Name]," so it can be personalised. End with the owner\'s name if provided, otherwise end with "Your Property Management Team". Keep it under 80 words. Friendly but professional tone. Write the message body only — no subject line.',
         },
         {
           role: 'user',
