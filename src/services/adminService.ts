@@ -191,7 +191,7 @@ export async function patchOrganizationPlan(organizationId: string, planCode: st
 
   const updated = await prisma.organizations.update({
     where: { id: organizationId },
-    data: { plan_code: planCode, updated_at: new Date() } as never,
+    data: { plan_code: planCode },
     select: { id: true, name: true, slug: true, plan_code: true },
   })
   return updated
