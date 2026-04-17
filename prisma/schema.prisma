@@ -643,6 +643,7 @@ model maintenance_cost_entries {
   recorded_by_admin_id                                         String?          @db.Uuid
   vendor_name                                                  String?
   description                                                  String?
+  category                                                     String?
   invoice_ref                                                  String?
   amount                                                       Decimal          @db.Decimal(12, 2)
   incurred_on                                                  DateTime         @db.Date

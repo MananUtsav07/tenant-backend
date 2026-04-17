@@ -1,6 +1,13 @@
 import { Router } from 'express'
 
 import {
+  createOwnerExpenseController,
+  deleteOwnerExpenseController,
+  getOwnerExpensesController,
+  getOwnerExpenseSummaryController,
+  updateOwnerExpenseController,
+} from '../controllers/expenseController.js'
+import {
   createOwnerProperty,
   getOwnerBrokerList,
   createOwnerTenant,
@@ -151,6 +158,12 @@ export function createOwnerRouter() {
   router.get('/automation/vacancy', getOwnerAutomationVacancyController)
   router.post('/automation/cash-flow/generate', postOwnerAutomationCashFlowGenerateController)
   router.post('/automation/cash-flow/maintenance-costs', postOwnerAutomationMaintenanceCostController)
+  router.get('/expenses', getOwnerExpensesController)
+  router.get('/expenses/summary', getOwnerExpenseSummaryController)
+  router.post('/expenses', createOwnerExpenseController)
+  router.patch('/expenses/:id', updateOwnerExpenseController)
+  router.delete('/expenses/:id', deleteOwnerExpenseController)
+
   router.get('/screening/applicants', getOwnerScreeningOverviewController)
   router.post('/screening/applicants', postOwnerScreeningApplicantController)
   router.get('/screening/applicants/:applicantId', getOwnerScreeningApplicantDetailController)
