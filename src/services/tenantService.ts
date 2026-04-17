@@ -145,3 +145,39 @@ export async function updateTenantPhone(input: { tenantId: string; organizationI
 export async function markReminderAsSent(reminderId: string, organizationId: string) {
   return prisma.rent_reminders.update({ where: { id: reminderId }, data: { status: 'sent', sent_at: new Date() } })
 }
+
+export async function updateTicketAiClassification(
+  ticketId: string,
+  organizationId: string,
+  category: string,
+  confidence: number,
+) {
+  return prisma.support_tickets.update({
+    where: { id: ticketId, organization_id: organizationId },
+    data: { ai_category: category, ai_confidence: confidence },
+  })
+}
+
+export async function getTenantContextForSmartCompose(tenantId: string, organizationId: string) {
+  const tenant = await prisma.tenants.findFirst({
+    where: { id: tenantId, organization_id: organizationId },
+    include: { properties: true, owners: { select: { full_name: true } } },
+  })
+  if (!tenant) return null
+
+  const openTicketCount = await prisma.support_tickets.count({
+    where: { tenant_id: tenantId, organization_id: organizationId, status: { in: ['open', 'in_progress'] } },
+  })
+
+  return {
+    full_name: tenant.full_name,
+    phone: tenant.phone,
+    payment_status: tenant.payment_status,
+    lease_end_date: tenant.lease_end_date instanceof Date
+      ? tenant.lease_end_date.toISOString().slice(0, 10)
+      : (tenant.lease_end_date ?? null),
+    property_name: tenant.properties?.property_name ?? null,
+    owner_name: tenant.owners?.full_name ?? null,
+    open_ticket_count: openTicketCount,
+  }
+}

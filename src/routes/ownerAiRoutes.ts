@@ -8,7 +8,7 @@ import {
   postOwnerTicketSummarize,
   postOwnerDraftTicketReply,
   postOwnerDraftBroadcast,
-  postOwnerDraftWhatsapp,
+  postOwnerSmartCompose,
   postOwnerLeaseDigest,
 } from '../controllers/ownerAiController.js'
 import { getOwnerWhatsAppConnectUrl } from '../controllers/ownerController.js'
@@ -25,7 +25,7 @@ export function createOwnerAiRouter() {
   router.post('/ai/summarize', postOwnerTicketSummarize)
   router.post('/ai/draft-reply', postOwnerDraftTicketReply)
   router.post('/ai/draft-broadcast', postOwnerDraftBroadcast)
-  router.post('/ai/draft-whatsapp', postOwnerDraftWhatsapp)
+  router.post('/ai/smart-compose', postOwnerSmartCompose)
   router.post('/ai/lease-digest', postOwnerLeaseDigest)
   router.get('/whatsapp/connect-url', getOwnerWhatsAppConnectUrl)
 

@@ -10,7 +10,8 @@ import { classifyTicketIntent } from '../services/ai/intentClassifier.js'
 import { summarizeTicket } from '../services/ai/ticketSummarizer.js'
 import { draftTicketReply } from '../services/ai/replyDrafter.js'
 import { draftBroadcastMessage } from '../services/ai/broadcastDrafter.js'
-import { draftWhatsappMessage } from '../services/ai/whatsappDrafter.js'
+import { draftSmartMessage } from '../services/ai/whatsappDrafter.js'
+import { getTenantContextForSmartCompose } from '../services/tenantService.js'
 import { generateLeaseDigest } from '../services/ai/leaseDigest.js'
 import {
   createOwnerTelegramConnectUrl,
@@ -191,18 +192,35 @@ export const postOwnerDraftBroadcast = asyncHandler(async (request: Request, res
   response.json({ ok: true, draft: result })
 })
 
-export const postOwnerDraftWhatsapp = asyncHandler(async (request: Request, response: Response) => {
-  requireOwnerContext(request)
-  const { intent, tenant_name } = request.body as { intent: string; tenant_name: string }
+export const postOwnerSmartCompose = asyncHandler(async (request: Request, response: Response) => {
+  const { organizationId } = requireOwnerContext(request)
+  const { tenant_id, intent } = request.body as { tenant_id: string; intent: string }
 
-  const result = await draftWhatsappMessage({ intent, tenantName: tenant_name })
+  if (!tenant_id || !intent) {
+    throw new AppError('tenant_id and intent are required', 400)
+  }
+
+  const ctx = await getTenantContextForSmartCompose(tenant_id, organizationId)
+  if (!ctx) {
+    throw new AppError('Tenant not found', 404)
+  }
+
+  const result = await draftSmartMessage({
+    intent,
+    tenantName: ctx.full_name,
+    ownerName: ctx.owner_name,
+    propertyName: ctx.property_name,
+    leaseEndDate: ctx.lease_end_date,
+    rentStatus: ctx.payment_status,
+    openTicketCount: ctx.open_ticket_count,
+  })
 
   if (result === null) {
-    response.json({ ok: false, reason: 'AI WhatsApp drafting not available or not configured' })
+    response.json({ ok: false, reason: 'AI Smart Compose not available or not configured' })
     return
   }
 
-  response.json({ ok: true, draft: result })
+  response.json({ ok: true, draft: result.draft })
 })
 
 export const postOwnerLeaseDigest = asyncHandler(async (request: Request, response: Response) => {

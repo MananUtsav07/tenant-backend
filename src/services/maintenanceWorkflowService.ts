@@ -973,6 +973,11 @@ export async function initializeMaintenanceWorkflow(input: {
 export async function maybeInitializeMaintenanceWorkflowForTicket(input: {
   ticketId: string
   organizationId: string
+  aiTriage?: {
+    urgency: MaintenanceUrgency
+    category: MaintenanceCategory
+    notes: string
+  }
 }) {
   const ticket = await loadTicketContext({
     ticketId: input.ticketId,
@@ -984,6 +989,20 @@ export async function maybeInitializeMaintenanceWorkflowForTicket(input: {
 
   const existing = await loadWorkflowRecord(ticket.id, ticket.organization_id)
   if (existing) {
+    return getOwnerMaintenanceWorkflowOverview({
+      ticketId: ticket.id,
+      organizationId: ticket.organization_id,
+    })
+  }
+
+  if (input.aiTriage) {
+    await insertWorkflow({
+      ticket,
+      category: input.aiTriage.category,
+      urgency: input.aiTriage.urgency,
+      classificationSource: 'ai',
+      classificationNotes: input.aiTriage.notes,
+    })
     return getOwnerMaintenanceWorkflowOverview({
       ticketId: ticket.id,
       organizationId: ticket.organization_id,

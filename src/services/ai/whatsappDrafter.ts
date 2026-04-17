@@ -1,28 +1,34 @@
 import { aiClient } from './aiClient.js'
 import { env } from '../../config/env.js'
 
-export type WhatsappDraftInput = {
+export type SmartComposeInput = {
   intent: string
   tenantName: string
-  ownerName?: string
+  ownerName?: string | null
+  propertyName?: string | null
+  leaseEndDate?: string | null
+  rentStatus?: string | null
+  openTicketCount?: number
 }
 
-export type WhatsappDraftResult = {
+export type SmartComposeResult = {
   draft: string
   model: string
 }
 
-export async function draftWhatsappMessage(input: WhatsappDraftInput): Promise<WhatsappDraftResult | null> {
-  if (!aiClient) {
-    return null
-  }
+export async function draftSmartMessage(input: SmartComposeInput): Promise<SmartComposeResult | null> {
+  if (!aiClient) return null
 
   try {
-    const lines = [
-      `Tenant name: ${input.tenantName}`,
-      `What the landlord wants to say: ${input.intent}`,
-    ]
-    if (input.ownerName) lines.push(`Landlord name: ${input.ownerName}`)
+    const contextLines: string[] = [`Tenant name: ${input.tenantName}`]
+    if (input.propertyName) contextLines.push(`Property: ${input.propertyName}`)
+    if (input.leaseEndDate) contextLines.push(`Lease end date: ${input.leaseEndDate}`)
+    if (input.rentStatus) contextLines.push(`Rent status: ${input.rentStatus}`)
+    if (typeof input.openTicketCount === 'number') {
+      contextLines.push(`Open support tickets: ${input.openTicketCount}`)
+    }
+    if (input.ownerName) contextLines.push(`Landlord name: ${input.ownerName}`)
+    contextLines.push(`What the landlord wants to say: ${input.intent}`)
 
     const client = aiClient as any
     const completion = await client.chat.completions.create({
@@ -31,15 +37,15 @@ export async function draftWhatsappMessage(input: WhatsappDraftInput): Promise<W
         {
           role: 'system',
           content:
-            'You are drafting a WhatsApp message from a landlord to a specific tenant. Keep it under 60 words. Conversational but professional. Do not use emojis unless the intent explicitly mentions them. Write the message body only — ready to send as-is.',
+            'You are helping a landlord compose a short, personalised WhatsApp message to a specific tenant. Use the context provided to make the message specific and relevant. Under 80 words. Conversational but professional. Do not use emojis unless explicitly requested. Write the message body only — ready to send as-is.',
         },
         {
           role: 'user',
-          content: lines.join('\n'),
+          content: contextLines.join('\n'),
         },
       ],
       temperature: 0.55,
-      max_tokens: 120,
+      max_tokens: 150,
     })
 
     const draft = completion.choices?.[0]?.message?.content?.trim() ?? ''

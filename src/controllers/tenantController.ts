@@ -21,6 +21,10 @@ import {
   getTenantMaintenanceWorkflowOverview,
   maybeInitializeMaintenanceWorkflowForTicket,
 } from '../services/maintenanceWorkflowService.js'
+import { classifyTicketIntent } from '../services/ai/intentClassifier.js'
+import { triageMaintenanceTicket } from '../services/ai/maintenanceTriage.js'
+import { isTicketClassificationEnabled } from '../services/ai/featureFlags.js'
+import { updateTicketAiClassification } from '../services/tenantService.js'
 import { getTenantRentPaymentState as loadTenantRentPaymentState, submitTenantRentPayment } from '../services/rentPaymentService.js'
 import { getTenantTicketThread, replyToTicketAsTenant } from '../services/ticketThreadService.js'
 import {
@@ -316,10 +320,47 @@ export const postTenantTicket = asyncHandler(async (request: Request, response: 
     },
   })
 
-  await maybeInitializeMaintenanceWorkflowForTicket({
-    ticketId: ticket.id,
-    organizationId,
-  })
+  void (async () => {
+    try {
+      let aiCategory: string | null = null
+
+      if (await isTicketClassificationEnabled(organizationId)) {
+        const classification = await classifyTicketIntent({
+          organizationId,
+          ticketId: ticket.id,
+          subject: parsed.subject,
+          message: parsed.message,
+        })
+        if (classification) {
+          await updateTicketAiClassification(ticket.id, organizationId, classification.category, classification.confidence)
+          aiCategory = classification.category
+        }
+      }
+
+      if (aiCategory === 'maintenance') {
+        const triage = await triageMaintenanceTicket({
+          subject: parsed.subject,
+          message: parsed.message,
+          organizationId,
+        })
+        await maybeInitializeMaintenanceWorkflowForTicket({
+          ticketId: ticket.id,
+          organizationId,
+          aiTriage: triage ?? undefined,
+        })
+      } else {
+        await maybeInitializeMaintenanceWorkflowForTicket({
+          ticketId: ticket.id,
+          organizationId,
+        })
+      }
+    } catch (error) {
+      console.error('[postTenantTicket] AI pipeline failed', { ticketId: ticket.id, error })
+      try {
+        await maybeInitializeMaintenanceWorkflowForTicket({ ticketId: ticket.id, organizationId })
+      } catch (_) {}
+    }
+  })()
 
   const vacancySignal = detectVacancyIntentFromTicket({
     subject: parsed.subject,
